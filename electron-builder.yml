@@ -1,0 +1,29 @@
+appId: com.argo.ide
+productName: Argo IDE
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+
+# node-pty is a native module: it must stay unpacked so its .node binary is
+# loadable from the asar archive at runtime.
+asarUnpack:
+  - node_modules/node-pty/**
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  # Unsigned local builds. Hardened runtime requires a Developer ID cert;
+  # without one, enabling it makes the app fail to launch.
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}

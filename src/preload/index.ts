@@ -1,0 +1,106 @@
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import {
+  AppSettings,
+  ArgoModel,
+  Attachment,
+  ChatRequest,
+  ChatSession,
+  DirEntry,
+  PtySpawnOptions,
+  SessionSummary,
+  ShimStatus,
+  StreamEvent
+} from '../shared/types'
+
+/**
+ * The only surface the renderer gets. Everything is an explicit named method —
+ * no generic `invoke(channel, ...)` escape hatch, so a compromised renderer
+ * can't reach IPC channels this file doesn't list.
+ */
+const api = {
+  settings: {
+    get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
+    save: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+      ipcRenderer.invoke('settings:save', patch)
+  },
+
+  shim: {
+    status: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:status'),
+    connect: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:connect'),
+    disconnect: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:disconnect'),
+    verify: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:verify'),
+    /** Send a line into the shim's PTY — used to answer the Duo prompt. */
+    input: (data: string): void => ipcRenderer.send('shim:input', data),
+    onOutput: (cb: (chunk: string) => void): (() => void) => {
+      const h = (_e: IpcRendererEvent, chunk: string): void => cb(chunk)
+      ipcRenderer.on('shim:output', h)
+      return () => ipcRenderer.removeListener('shim:output', h)
+    },
+    onState: (cb: (status: ShimStatus) => void): (() => void) => {
+      const h = (_e: IpcRendererEvent, status: ShimStatus): void => cb(status)
+      ipcRenderer.on('shim:state', h)
+      return () => ipcRenderer.removeListener('shim:state', h)
+    }
+  },
+
+  chat: {
+    models: (): Promise<ArgoModel[]> => ipcRenderer.invoke('chat:models'),
+    /**
+     * Start a streaming completion. Returns an unsubscribe function; call it
+     * when the message is finished or the component unmounts.
+     */
+    send: (req: ChatRequest, onEvent: (e: StreamEvent) => void): (() => void) => {
+      const channel = `chat:stream:${req.requestId}`
+      const h = (_e: IpcRendererEvent, event: StreamEvent): void => onEvent(event)
+      ipcRenderer.on(channel, h)
+      ipcRenderer.send('chat:send', req)
+      return () => ipcRenderer.removeListener(channel, h)
+    },
+    cancel: (requestId: string): void => ipcRenderer.send('chat:cancel', requestId)
+  },
+
+  fs: {
+    list: (dir: string): Promise<DirEntry[]> => ipcRenderer.invoke('fs:list', dir),
+    readText: (path: string): Promise<string> => ipcRenderer.invoke('fs:readText', path),
+    dataUrl: (path: string, mime: string): Promise<string> =>
+      ipcRenderer.invoke('fs:dataUrl', path, mime),
+    classify: (path: string): Promise<'text' | 'image' | 'pdf' | 'binary'> =>
+      ipcRenderer.invoke('fs:classify', path),
+    attach: (path: string, id: string): Promise<Attachment> =>
+      ipcRenderer.invoke('fs:attach', path, id),
+    home: (): Promise<string> => ipcRenderer.invoke('fs:home'),
+    pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFolder'),
+    pickFiles: (): Promise<string[]> => ipcRenderer.invoke('dialog:openFiles')
+  },
+
+  terminal: {
+    spawn: (opts: PtySpawnOptions): void => ipcRenderer.send('terminal:spawn', opts),
+    write: (id: string, data: string): void => ipcRenderer.send('terminal:write', id, data),
+    resize: (id: string, cols: number, rows: number): void =>
+      ipcRenderer.send('terminal:resize', id, cols, rows),
+    kill: (id: string): void => ipcRenderer.send('terminal:kill', id),
+    onData: (id: string, cb: (data: string) => void): (() => void) => {
+      const channel = `terminal:data:${id}`
+      const h = (_e: IpcRendererEvent, data: string): void => cb(data)
+      ipcRenderer.on(channel, h)
+      return () => ipcRenderer.removeListener(channel, h)
+    },
+    onExit: (id: string, cb: (code: number) => void): (() => void) => {
+      const channel = `terminal:exit:${id}`
+      const h = (_e: IpcRendererEvent, code: number): void => cb(code)
+      ipcRenderer.on(channel, h)
+      return () => ipcRenderer.removeListener(channel, h)
+    }
+  },
+
+  sessions: {
+    list: (): Promise<SessionSummary[]> => ipcRenderer.invoke('sessions:list'),
+    read: (id: string): Promise<ChatSession | null> => ipcRenderer.invoke('sessions:read', id),
+    write: (s: ChatSession): Promise<void> => ipcRenderer.invoke('sessions:write', s),
+    delete: (id: string): Promise<void> => ipcRenderer.invoke('sessions:delete', id)
+  }
+}
+
+export type Api = typeof api
+
+contextBridge.exposeInMainWorld('api', api)

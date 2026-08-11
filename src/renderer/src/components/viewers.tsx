@@ -1,6 +1,31 @@
 import { JSX, useEffect, useRef, useState } from 'react'
-import Editor from '@monaco-editor/react'
+import Editor, { loader } from '@monaco-editor/react'
+import * as monaco from 'monaco-editor'
+import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
+import CssWorker from 'monaco-editor/language/css/css.worker?worker'
+import HtmlWorker from 'monaco-editor/language/html/html.worker?worker'
+import JsonWorker from 'monaco-editor/language/json/json.worker?worker'
+import TypeScriptWorker from 'monaco-editor/language/typescript/ts.worker?worker'
 import { GlobeIcon, RefreshIcon } from './Icons'
+
+/**
+ * @monaco-editor/react otherwise downloads Monaco from jsDelivr at runtime.
+ * Packaged ArgoIDE intentionally blocks remote scripts, so configure the
+ * already-installed module and its workers before the first Editor mounts.
+ */
+const monacoScope = self as typeof self & {
+  MonacoEnvironment: { getWorker: (workerId: string, label: string) => Worker }
+}
+monacoScope.MonacoEnvironment = {
+  getWorker: (_workerId, label) => {
+    if (label === 'json') return new JsonWorker()
+    if (label === 'css' || label === 'scss' || label === 'less') return new CssWorker()
+    if (label === 'html' || label === 'handlebars' || label === 'razor') return new HtmlWorker()
+    if (label === 'typescript' || label === 'javascript') return new TypeScriptWorker()
+    return new EditorWorker()
+  }
+}
+loader.config({ monaco })
 
 /** Map a file extension to a Monaco language id. */
 export function languageOf(path: string): string {
@@ -24,11 +49,15 @@ export function languageOf(path: string): string {
 export function CodeViewer({ path }: { path: string }): JSX.Element {
   const [content, setContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [editorReady, setEditorReady] = useState(false)
+  const [editorTimedOut, setEditorTimedOut] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setContent(null)
     setError(null)
+    setEditorReady(false)
+    setEditorTimedOut(false)
     window.api.fs
       .readText(path)
       .then((text) => !cancelled && setContent(text))
@@ -38,8 +67,26 @@ export function CodeViewer({ path }: { path: string }): JSX.Element {
     }
   }, [path])
 
+  // Never strand the viewer on a spinner again. If Monaco cannot initialize
+  // for an unexpected platform reason, the file remains readable as plain text.
+  useEffect(() => {
+    if (content === null || editorReady) return
+    const timer = window.setTimeout(() => setEditorTimedOut(true), 8_000)
+    return () => window.clearTimeout(timer)
+  }, [content, editorReady])
+
   if (error) return <div className="empty-state">{error}</div>
   if (content === null) return <div className="empty-state">Loading…</div>
+  if (editorTimedOut) {
+    return (
+      <div className="code-fallback">
+        <div className="banner banner--warn">
+          Syntax highlighting could not start. Showing the file as plain text.
+        </div>
+        <pre>{content}</pre>
+      </div>
+    )
+  }
 
   return (
     <Editor
@@ -48,6 +95,8 @@ export function CodeViewer({ path }: { path: string }): JSX.Element {
       path={path}
       language={languageOf(path)}
       value={content}
+      loading={<div className="empty-state">Starting local editor…</div>}
+      onMount={() => setEditorReady(true)}
       options={{
         readOnly: true,
         domReadOnly: true,

@@ -214,6 +214,7 @@ export default function App(): JSX.Element {
             <ChatPane
               settings={settings}
               status={status}
+              projectRoot={root}
               onOpenSettings={() => setShowSettings(true)}
               onOpenConnect={() => setShowConnect(true)}
             />

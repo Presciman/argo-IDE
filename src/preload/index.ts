@@ -7,6 +7,8 @@ import {
   ChatSession,
   DirEntry,
   PtySpawnOptions,
+  ProjectContext,
+  ProjectFile,
   SessionSummary,
   ShimOccupant,
   ShimStatus,
@@ -84,6 +86,12 @@ const api = {
       ipcRenderer.invoke('fs:classify', path),
     attach: (path: string, id: string): Promise<Attachment> =>
       ipcRenderer.invoke('fs:attach', path, id),
+    /** Recursive source tree for the directory currently open in Explorer. */
+    projectContext: (root: string): Promise<ProjectContext> =>
+      ipcRenderer.invoke('fs:projectContext', root),
+    /** Model-requested text read, constrained by main process to the Explorer root. */
+    readProjectFile: (root: string, path: string): Promise<ProjectFile> =>
+      ipcRenderer.invoke('fs:readProjectFile', root, path),
     home: (): Promise<string> => ipcRenderer.invoke('fs:home'),
     pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFolder'),
     pickFiles: (): Promise<string[]> => ipcRenderer.invoke('dialog:openFiles')

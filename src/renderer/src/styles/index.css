@@ -558,6 +558,34 @@ select {
   }
 }
 
+.project-context {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  color: var(--fg-2);
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+}
+.project-context__label {
+  color: var(--fg-1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.project-context__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-context--error {
+  color: var(--err);
+}
+
 /* ------------------------------------------------------------ composer */
 
 .composer {
@@ -779,6 +807,21 @@ select {
   height: 100%;
   border: none;
   background: #fff;
+}
+
+.code-fallback {
+  height: 100%;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-0);
+}
+.code-fallback pre {
+  margin: 0;
+  color: var(--fg-0);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
 }
 
 .urlbar {

@@ -211,19 +211,23 @@ grey = disconnected, amber = connecting, green = connected, red = error.
   pane 3; the folder also becomes the working directory for new terminals.
 - **Chat** — pick a **model** (fetched live from Argo) and an **agent** (a local
   system-prompt preset: General, Coder, Explainer, Shell, HPC/ALCF). The **+**
-  button attaches files (text files are inlined into the prompt) or grants the
-  agent read access to a folder. The **☰** button lists saved sessions; they
-  persist to `~/Library/Application Support/argo-ide/sessions/`.
+  button attaches extra files (text files are inlined into the prompt) or grants
+  access to another folder. The AI Agent automatically receives the complete
+  source tree under the folder open in Explorer and can securely read text files
+  from that project on demand. The **☰** button lists saved sessions; they persist
+  to `~/Library/Application Support/argo-ide/sessions/`.
 - **Viewer** — the globe icon opens a browser tab; the split icon stacks
   another row so you can read a PDF above a source file. Drag any divider to
-  resize.
+  resize. Monaco and all language workers are bundled locally, so source files
+  open without a CDN or internet connection; plain text is used as a fallback
+  if the editor cannot initialize.
 - **Terminal** — a login shell with `CELS_USERNAME` already set, so running
   `argo-shim` or `claude` by hand behaves the same as the Connect button.
 - **Windows** — use **File → New Window**, **⌘N**, or the title-bar window icon.
   Every window reuses the same healthy Terminal argo-shim; each keeps its own
   terminal PTY.
 - **Voice** — the microphone transcribes into the composer using Chromium's
-  speech-recognition service. Voice mode reads completed assistant replies
+  speech-recognition service. Voice mode reads completed AI Agent replies
   aloud. macOS asks for microphone/speech permission the first time.
 
 ### Known gaps

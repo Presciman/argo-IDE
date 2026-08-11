@@ -6,22 +6,58 @@ import {
   ChatMessage,
   ChatSession,
   FolderGrant,
+  ProjectContext,
+  Role,
   SessionSummary,
   ShimStatus
 } from '../../../shared/types'
 import { AGENT_PRESETS, findAgent } from '../agents'
 import Composer from './Composer'
 import SessionDrawer from './SessionDrawer'
-import { GearIcon, MenuIcon, PlugIcon } from './Icons'
+import { FolderIcon, GearIcon, MenuIcon, PlugIcon } from './Icons'
 
 interface Props {
   settings: AppSettings
   status: ShimStatus
+  projectRoot: string | null
   onOpenSettings: () => void
   onOpenConnect: () => void
 }
 
 const uid = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+const MAX_AGENT_FILE_READS = 8
+
+type WireMessage = { role: Role; content: string }
+
+function projectInstructions(context: ProjectContext | null): string {
+  if (!context) {
+    return (
+      'No project folder is currently open in the Explorer. If the task depends on local files, ' +
+      'ask the user to open a folder first.'
+    )
+  }
+
+  const omitted = context.excludedDirectories.length
+    ? `\nGenerated/dependency directories not expanded: ${context.excludedDirectories.join(', ')}`
+    : ''
+  return `You are the AI Agent inside ArgoIDE. The user explicitly opened this project root:
+${context.root}
+
+You can already see its recursive source tree below; do not ask the user to attach files that are listed here.
+${context.tree}${omitted}
+
+When you need the contents of a text file, output exactly one line and nothing else:
+[[ARGO_READ_FILE:path/relative/to/project]]
+
+ArgoIDE will securely read that file only from the open project and return its contents. You may repeat this for multiple files, one request at a time. Never claim to have read a file until ArgoIDE has returned it.`
+}
+
+function requestedProjectFile(text: string): string | null {
+  const match = text.match(
+    /^\s*(?:```(?:text)?\s*)?\[\[ARGO_READ_FILE:([^\]\r\n]+)\]\](?:\s*```)?\s*$/i
+  )
+  return match?.[1].trim() || null
+}
 
 function emptySession(model: string): ChatSession {
   const now = Date.now()
@@ -62,6 +98,7 @@ function buildUserContent(text: string, attachments: Attachment[], grants: Folde
 export default function ChatPane({
   settings,
   status,
+  projectRoot,
   onOpenSettings,
   onOpenConnect
 }: Props): JSX.Element {
@@ -74,6 +111,9 @@ export default function ChatPane({
   const [streaming, setStreaming] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
   const [voiceMode, setVoiceMode] = useState(false)
+  const [projectContext, setProjectContext] = useState<ProjectContext | null>(null)
+  const [projectContextError, setProjectContextError] = useState<string | null>(null)
+  const [indexingProject, setIndexingProject] = useState(false)
 
   const logRef = useRef<HTMLDivElement>(null)
   const activeRequest = useRef<string | null>(null)
@@ -108,6 +148,38 @@ export default function ChatPane({
   useEffect(() => {
     void refreshSummaries()
   }, [refreshSummaries])
+
+  const loadProjectContext = useCallback(async (): Promise<ProjectContext | null> => {
+    if (!projectRoot) return null
+    return window.api.fs.projectContext(projectRoot)
+  }, [projectRoot])
+
+  // The left Explorer is the authority for the AI Agent's automatic project
+  // scope. Index it immediately when the user opens or switches folders.
+  useEffect(() => {
+    let cancelled = false
+    setProjectContext(null)
+    setProjectContextError(null)
+    if (!projectRoot) {
+      setIndexingProject(false)
+      return
+    }
+
+    setIndexingProject(true)
+    void loadProjectContext()
+      .then((context) => {
+        if (!cancelled) setProjectContext(context)
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setProjectContextError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setIndexingProject(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [loadProjectContext, projectRoot])
 
   // Load the model list once the connection reports healthy, and pick a
   // default. Argo's ids are display names; internalId is what the API wants.
@@ -199,68 +271,161 @@ export default function ChatPane({
         messages: [...s.messages, userMsg, assistantMsg]
       }))
       setAttachments([])
-
-      const requestId = uid()
-      activeRequest.current = requestId
       setStreaming(true)
 
-      // The wire history excludes the placeholder we just added for the reply.
-      const history = withUser.messages
-        .slice(0, -1)
-        .map((m) => ({ role: m.role, content: m.content }))
+      // Mark the indexing phase as cancellable too. It is not a real network
+      // id, but cancel() safely ignores ids that are not in the main map.
+      const preparationId = uid()
+      activeRequest.current = preparationId
 
-      let accumulated = ''
-      const finish = (patch: Partial<ChatMessage>): void => {
-        // A cancelled request may still deliver a trailing event; ignore it so
-        // a newer request's state isn't clobbered.
-        if (activeRequest.current !== requestId) return
-
-        const next = updateSession((prev) => ({
-          ...prev,
-          updatedAt: Date.now(),
-          messages: prev.messages.map((m) => (m.id === assistantMsg.id ? { ...m, ...patch } : m))
-        }))
-        void window.api.sessions.write(next).then(refreshSummaries)
-
-        unsubscribe.current?.()
-        unsubscribe.current = null
-        activeRequest.current = null
-        setStreaming(false)
-      }
-
-      unsubscribe.current = window.api.chat.send(
-        {
-          requestId,
-          model: current.model,
-          messages: [
-            { role: 'system' as const, content: findAgent(current.agentId).systemPrompt },
-            ...history
-          ]
-        },
-        (event) => {
-          if (activeRequest.current !== requestId) return
-          if (event.type === 'delta') {
-            accumulated += event.text
-            // Update in place; persistence happens once, in finish().
-            updateSession((prev) => ({
-              ...prev,
-              messages: prev.messages.map((m) =>
-                m.id === assistantMsg.id ? { ...m, content: accumulated } : m
-              )
-            }))
-          } else if (event.type === 'done') {
-            if (voiceModeRef.current && accumulated.trim()) {
-              window.speechSynthesis.cancel()
-              window.speechSynthesis.speak(new SpeechSynthesisUtterance(accumulated))
-            }
-            finish({ content: accumulated })
-          } else {
-            finish({ content: accumulated, error: event.message })
+      void (async () => {
+        let context = projectRoot ? projectContext : null
+        if (projectRoot) {
+          try {
+            context = await loadProjectContext()
+            setProjectContext(context)
+            setProjectContextError(null)
+          } catch (err) {
+            setProjectContextError((err as Error).message)
           }
         }
-      )
+        if (activeRequest.current !== preparationId) return
+        const workspaceContext = context
+
+        // The wire history excludes the placeholder we just added for the reply.
+        const history: WireMessage[] = withUser.messages
+          .slice(0, -1)
+          .map((m) => ({ role: m.role, content: m.content }))
+        const initialMessages: WireMessage[] = [
+          {
+            role: 'system',
+            content: `${findAgent(current.agentId).systemPrompt}\n\n${projectInstructions(workspaceContext)}`
+          },
+          ...history
+        ]
+
+        const finish = (requestId: string, patch: Partial<ChatMessage>): void => {
+          // A cancelled request may still deliver a trailing event; ignore it so
+          // a newer request's state isn't clobbered.
+          if (activeRequest.current !== requestId) return
+
+          const next = updateSession((prev) => ({
+            ...prev,
+            updatedAt: Date.now(),
+            messages: prev.messages.map((m) =>
+              m.id === assistantMsg.id ? { ...m, ...patch } : m
+            )
+          }))
+          void window.api.sessions.write(next).then(refreshSummaries)
+
+          unsubscribe.current?.()
+          unsubscribe.current = null
+          activeRequest.current = null
+          setStreaming(false)
+        }
+
+        const streamRound = (messages: WireMessage[], readCount: number): void => {
+          const requestId = uid()
+          activeRequest.current = requestId
+          let accumulated = ''
+
+          unsubscribe.current?.()
+          unsubscribe.current = window.api.chat.send(
+            { requestId, model: current.model, messages },
+            (event) => {
+              if (activeRequest.current !== requestId) return
+              if (event.type === 'delta') {
+                accumulated += event.text
+                // Update in place; persistence happens once, in finish().
+                updateSession((prev) => ({
+                  ...prev,
+                  messages: prev.messages.map((m) =>
+                    m.id === assistantMsg.id ? { ...m, content: accumulated, error: undefined } : m
+                  )
+                }))
+                return
+              }
+
+              if (event.type === 'error') {
+                finish(requestId, { content: accumulated, error: event.message })
+                return
+              }
+
+              const requestedPath = workspaceContext ? requestedProjectFile(accumulated) : null
+              if (!workspaceContext || !requestedPath) {
+                if (voiceModeRef.current && accumulated.trim()) {
+                  window.speechSynthesis.cancel()
+                  window.speechSynthesis.speak(new SpeechSynthesisUtterance(accumulated))
+                }
+                finish(requestId, { content: accumulated })
+                return
+              }
+
+              if (readCount >= MAX_AGENT_FILE_READS) {
+                finish(requestId, {
+                  content: '',
+                  error: `AI Agent stopped after ${MAX_AGENT_FILE_READS} project-file reads in one turn.`
+                })
+                return
+              }
+
+              updateSession((prev) => ({
+                ...prev,
+                messages: prev.messages.map((m) =>
+                  m.id === assistantMsg.id
+                    ? { ...m, content: `Reading ${requestedPath}…`, error: undefined }
+                    : m
+                )
+              }))
+              unsubscribe.current?.()
+              unsubscribe.current = null
+
+              void window.api.fs
+                .readProjectFile(workspaceContext.root, requestedPath)
+                .then((file) => {
+                  if (activeRequest.current !== requestId) return
+                  const result = `ArgoIDE read this local project file for you:\n<file path="${file.relativePath}"${
+                    file.truncated ? ' truncated="true"' : ''
+                  }>\n${file.content}\n</file>\nContinue answering the user's original request. Read another file only if necessary.`
+                  streamRound(
+                    [
+                      ...messages,
+                      { role: 'assistant', content: accumulated },
+                      { role: 'user', content: result }
+                    ],
+                    readCount + 1
+                  )
+                })
+                .catch((err: Error) => {
+                  if (activeRequest.current !== requestId) return
+                  streamRound(
+                    [
+                      ...messages,
+                      { role: 'assistant', content: accumulated },
+                      {
+                        role: 'user',
+                        content: `ArgoIDE could not read "${requestedPath}": ${err.message}. Choose a valid text-file path from the project tree and continue.`
+                      }
+                    ],
+                    readCount + 1
+                  )
+                })
+            }
+          )
+        }
+
+        streamRound(initialMessages, 0)
+      })()
     },
-    [attachments, grants, refreshSummaries, updateSession]
+    [
+      attachments,
+      grants,
+      loadProjectContext,
+      projectContext,
+      projectRoot,
+      refreshSummaries,
+      updateSession
+    ]
   )
 
   const attachFiles = useCallback(async (paths: string[]) => {
@@ -359,9 +524,10 @@ export default function ChatPane({
               <div className="empty-state">
                 {connected ? (
                   <>
-                    <div>Ask anything.</div>
+                    <div>Ask the AI Agent anything.</div>
                     <div>
-                      Attach files with <strong>+</strong>, then pick a model and an agent below.
+                      The open Explorer folder is indexed automatically. The AI Agent can inspect
+                      its files when needed.
                     </div>
                   </>
                 ) : (
@@ -387,7 +553,9 @@ export default function ChatPane({
                 key={m.id}
                 className={`msg msg--${m.role}${m.error ? ' msg--error' : ''}`}
               >
-                <div className="msg__role">{m.role}</div>
+                <div className="msg__role">
+                  {m.role === 'assistant' ? 'AI Agent' : m.role === 'user' ? 'You' : m.role}
+                </div>
                 {m.attachments && m.attachments.length > 0 && (
                   <div className="msg__attachments">
                     {m.attachments.map((a) => (
@@ -406,6 +574,23 @@ export default function ChatPane({
                 </div>
               </div>
             ))}
+          </div>
+
+          <div
+            className={`project-context${projectContextError ? ' project-context--error' : ''}`}
+            title={projectContext?.root ?? projectContextError ?? 'Open a folder in Explorer'}
+          >
+            <FolderIcon size={12} />
+            <span className="project-context__label">AI Agent context</span>
+            <span className="project-context__value">
+              {!projectRoot
+                ? 'No Explorer folder open'
+                : indexingProject
+                  ? 'Indexing project…'
+                  : projectContext
+                    ? `${projectContext.name} · ${projectContext.fileCount} files · ${projectContext.directoryCount} folders${projectContext.truncated ? ' · tree truncated' : ''}`
+                    : projectContextError || 'Project unavailable'}
+            </span>
           </div>
 
           <Composer

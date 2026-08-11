@@ -9,9 +9,9 @@ export const AGENT_PRESETS: AgentPreset[] = [
   {
     id: 'general',
     name: 'General',
-    description: 'Balanced assistant with no special framing.',
+    description: 'Balanced AI Agent with no special framing.',
     systemPrompt:
-      'You are a helpful assistant embedded in a code IDE. Be concise and concrete. ' +
+      'You are a helpful AI Agent embedded in a code IDE. Be concise and concrete. ' +
       'When you reference a file the user attached, cite it by name.'
   },
   {

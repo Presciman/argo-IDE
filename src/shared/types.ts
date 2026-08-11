@@ -55,6 +55,26 @@ export interface Attachment {
   skipped?: string
 }
 
+/** Recursive snapshot of the folder currently open in the Explorer. */
+export interface ProjectContext {
+  root: string
+  name: string
+  tree: string
+  fileCount: number
+  directoryCount: number
+  truncated: boolean
+  /** Generated/dependency directories shown but not expanded in the prompt. */
+  excludedDirectories: string[]
+}
+
+/** A bounded text-file read requested by the AI Agent inside the open project. */
+export interface ProjectFile {
+  relativePath: string
+  content: string
+  bytes: number
+  truncated: boolean
+}
+
 // ---------------------------------------------------------------- chat
 
 export type Role = 'user' | 'assistant' | 'system'

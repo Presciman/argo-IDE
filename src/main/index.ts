@@ -179,6 +179,10 @@ function registerIpc(): void {
   )
   ipcMain.handle('fs:classify', (_e, path: string) => files.classify(path))
   ipcMain.handle('fs:attach', (_e, path: string, id: string) => files.makeAttachment(path, id))
+  ipcMain.handle('fs:projectContext', (_e, root: string) => files.projectContext(root))
+  ipcMain.handle('fs:readProjectFile', (_e, root: string, path: string) =>
+    files.readProjectFile(root, path)
+  )
   ipcMain.handle('fs:home', () => app.getPath('home'))
 
   ipcMain.handle('dialog:openFolder', async () => {

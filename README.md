@@ -32,6 +32,8 @@ you are off the ANL network; turn it off when you are already on the intranet.
 ---
 
 ## Part 1 — argo-shim setup
+> [!WARNING]
+> If you have already set up **argo-shim**, please skip to [Part 2](#part-2--argo-ide).
 
 argo-IDE talks to Argo through [argo-shim](https://github.com/n-getty/argo-shim),
 a local HTTP proxy that tunnels to the Argo API over SSH. **Set this up and

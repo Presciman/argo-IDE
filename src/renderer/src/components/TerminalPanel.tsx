@@ -64,13 +64,19 @@ export default function TerminalPanel({ id, cwd, resizeNonce, onToggle }: Props)
     termRef.current = term
     fitRef.current = fit
 
-    window.api.terminal.spawn({ id, cwd: cwd ?? undefined, cols: term.cols, rows: term.rows })
-
     const offData = window.api.terminal.onData(id, (data) => term.write(data))
-    const offExit = window.api.terminal.onExit(id, (code) =>
-      term.write(`\r\n\x1b[90m[process exited with code ${code}]\x1b[0m\r\n`)
-    )
+    const offExit = window.api.terminal.onExit(id, (code) => {
+      // A clean shell exit is expected (for example after `exit`) and does not
+      // need an IDE diagnostic. Keep failures visible because they are useful.
+      if (code !== 0) {
+        term.write(`\r\n\x1b[31m[process exited with code ${code}]\x1b[0m\r\n`)
+      }
+    })
     const input = term.onData((data) => window.api.terminal.write(id, data))
+
+    // Subscribe before spawning so an immediate launch failure is visible in
+    // the terminal instead of racing past the renderer listeners.
+    window.api.terminal.spawn({ id, cwd: cwd ?? undefined, cols: term.cols, rows: term.rows })
 
     // The panel resizes with the window and with its own splitter.
     const observer = new ResizeObserver(() => {

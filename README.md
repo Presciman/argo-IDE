@@ -153,7 +153,22 @@ npm run build:mac
 ```
 
 The build is unsigned, so the first launch needs **right-click → Open** (or
-`xattr -dr com.apple.quarantine "dist/mac-arm64/Argo IDE.app"`).
+`xattr -dr com.apple.quarantine "dist/mac-arm64/ArgoIDE.app"`).
+
+### App icon
+
+`build/icon.icns` and `build/icon.png` are committed, so a normal build needs
+nothing extra. To regenerate them from new artwork:
+
+```bash
+./build/make-icon.sh path/to/source.png
+```
+
+The source should be a square, full-bleed image. The script trims any flat
+black border baked into it, insets the artwork on Apple's 1024/824 icon grid,
+masks it to the system squircle (a continuous-curvature shape, not a plain
+rounded rectangle), adds the platform drop shadow, and emits every size the
+Dock and Finder ask for.
 
 ### Settings
 
@@ -172,10 +187,15 @@ Open the **gear icon** in the Agent pane header.
 
 Click the **plug icon** in the Agent pane header.
 
-**Connect** launches argo-shim inside a pseudo-terminal and streams its output
-into the dialog. Two-factor login happens right there: ssh writes the Duo
-challenge to its terminal, you read it in the log, and you type your response
-(usually `1` for a push) into the reply box.
+**Start IDE shim** launches argo-shim inside a pseudo-terminal and streams its
+output into the dialog. Two-factor login happens right there: ssh writes the
+Duo challenge to its terminal, you read it in the log, and you type your
+response (usually `1` for a push) into the reply box.
+
+If argo-shim is already listening on the configured port because you started it
+in Terminal, the dialog instead offers **Use Terminal shim**. The IDE stops only
+an argo-shim process it launched itself, health-checks the Terminal instance,
+and routes requests through it. Closing the IDE never stops that external shim.
 
 **Check connection** verifies the whole chain by listing models — the only
 signal that actually proves shim → tunnel → Argo works. Use it on its own when
@@ -199,11 +219,17 @@ grey = disconnected, amber = connecting, green = connected, red = error.
   resize.
 - **Terminal** — a login shell with `CELS_USERNAME` already set, so running
   `argo-shim` or `claude` by hand behaves the same as the Connect button.
+- **Windows** — use **File → New Window**, **⌘N**, or the title-bar window icon.
+  Every window reuses the same healthy Terminal argo-shim; each keeps its own
+  terminal PTY.
+- **Voice** — the microphone transcribes into the composer using Chromium's
+  speech-recognition service. Voice mode reads completed assistant replies
+  aloud. macOS asks for microphone/speech permission the first time.
 
 ### Known gaps
 
-- **Voice input and voice mode** are present in the composer but not wired to a
-  speech engine yet; both buttons are disabled.
+- Voice input depends on speech-recognition support in the installed Electron
+  build and may be unavailable in offline environments.
 - The **code viewer is read-only** — this pane browses code, it does not edit it.
 - The chat sends plain text; it has no tool-use or file-editing loop.
 - PDFs are loaded fully into memory as data URLs, which is fine for papers but

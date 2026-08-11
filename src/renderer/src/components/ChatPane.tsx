@@ -73,10 +73,12 @@ export default function ChatPane({
   const [grants, setGrants] = useState<FolderGrant[]>([])
   const [streaming, setStreaming] = useState(false)
   const [modelError, setModelError] = useState<string | null>(null)
+  const [voiceMode, setVoiceMode] = useState(false)
 
   const logRef = useRef<HTMLDivElement>(null)
   const activeRequest = useRef<string | null>(null)
   const unsubscribe = useRef<(() => void) | null>(null)
+  const voiceModeRef = useRef(false)
 
   /**
    * Mirror of `session` that is always current.
@@ -135,7 +137,19 @@ export default function ChatPane({
   }, [session.messages])
 
   // Drop any in-flight stream if the pane unmounts.
-  useEffect(() => () => unsubscribe.current?.(), [])
+  useEffect(
+    () => () => {
+      unsubscribe.current?.()
+      window.speechSynthesis?.cancel()
+    },
+    []
+  )
+
+  const changeVoiceMode = useCallback((enabled: boolean) => {
+    voiceModeRef.current = enabled
+    setVoiceMode(enabled)
+    if (!enabled) window.speechSynthesis?.cancel()
+  }, [])
 
   const persist = useCallback(
     (next: ChatSession) => {
@@ -154,6 +168,7 @@ export default function ChatPane({
     unsubscribe.current = null
     activeRequest.current = null
     setStreaming(false)
+    window.speechSynthesis?.cancel()
   }, [])
 
   const send = useCallback(
@@ -234,6 +249,10 @@ export default function ChatPane({
               )
             }))
           } else if (event.type === 'done') {
+            if (voiceModeRef.current && accumulated.trim()) {
+              window.speechSynthesis.cancel()
+              window.speechSynthesis.speak(new SpeechSynthesisUtterance(accumulated))
+            }
             finish({ content: accumulated })
           } else {
             finish({ content: accumulated, error: event.message })
@@ -406,6 +425,8 @@ export default function ChatPane({
             onStop={stop}
             streaming={streaming}
             disabled={!connected}
+            voiceMode={voiceMode}
+            onVoiceModeChange={changeVoiceMode}
           />
         </div>
       </div>

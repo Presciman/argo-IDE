@@ -141,6 +141,15 @@ export const TerminalIcon = ({ size }: Props): JSX.Element =>
     size
   )
 
+export const NewWindowIcon = ({ size }: Props): JSX.Element =>
+  svg(
+    <>
+      <rect x="2" y="4" width="9.5" height="9.5" rx="1.3" />
+      <path d="M5 4V2.5h8.5V11H12" />
+    </>,
+    size
+  )
+
 export const TrashIcon = ({ size }: Props): JSX.Element =>
   svg(
     <>

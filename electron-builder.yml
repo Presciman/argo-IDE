@@ -1,5 +1,5 @@
 appId: com.argo.ide
-productName: Argo IDE
+productName: ArgoIDE
 directories:
   buildResources: build
   output: dist
@@ -16,6 +16,10 @@ asarUnpack:
 
 mac:
   category: public.app-category.developer-tools
+  icon: build/icon.icns
+  extendInfo:
+    NSMicrophoneUsageDescription: ArgoIDE uses the microphone for voice input.
+    NSSpeechRecognitionUsageDescription: ArgoIDE transcribes speech into the message composer.
   target:
     - target: dmg
       arch: [arm64, x64]

@@ -1,5 +1,6 @@
 {
   "name": "argo-ide",
+  "productName": "ArgoIDE",
   "version": "0.1.0",
   "description": "An IDE for Argo — file explorer, agent chat, multi-format viewer, and a local terminal.",
   "main": "./out/main/index.js",
@@ -8,7 +9,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "electron-builder install-app-deps && node scripts/fix-node-pty-permissions.mjs",
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",

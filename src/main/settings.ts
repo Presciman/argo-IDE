@@ -77,6 +77,24 @@ export function readShimToken(): string | null {
   }
 }
 
+/** Authentication headers for the selected connection mode. */
+export function argoAuthHeaders(s: AppSettings = loadSettings()): Record<string, string> {
+  if (s.useShim) {
+    const token = readShimToken()
+    if (!token) return {}
+    // argo-shim 0.3.19 checks x-api-key first and only falls back to Bearer
+    // when x-api-key is absent. Send the session token in both forms for
+    // compatibility with shim versions and OpenAI-style clients.
+    return {
+      'x-api-key': token,
+      authorization: `Bearer ${token}`
+    }
+  }
+
+  const username = s.celsUsername.trim()
+  return username ? { 'x-api-key': username } : {}
+}
+
 /**
  * Environment for any child process that talks to Argo (the shim itself, and
  * terminals the user opens). CELS_USERNAME is the one setting the shim can't

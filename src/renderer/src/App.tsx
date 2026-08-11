@@ -1,4 +1,4 @@
-import { JSX, useCallback, useEffect, useState } from 'react'
+import { JSX, useCallback, useEffect, useRef, useState } from 'react'
 import { AppSettings, DEFAULT_SETTINGS, ShimStatus } from '../../shared/types'
 import FileExplorer from './components/FileExplorer'
 import ChatPane from './components/ChatPane'
@@ -7,7 +7,7 @@ import TerminalPanel from './components/TerminalPanel'
 import SettingsModal from './components/SettingsModal'
 import ConnectModal from './components/ConnectModal'
 import Splitter from './components/Splitter'
-import { TerminalIcon } from './components/Icons'
+import { NewWindowIcon, TerminalIcon } from './components/Icons'
 
 const uid = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
@@ -24,10 +24,14 @@ const INITIAL_STATUS: ShimStatus = {
   baseUrl: '',
   port: 0,
   hasToken: false,
-  message: ''
+  message: '',
+  ownsProcess: false
 }
 
 export default function App(): JSX.Element {
+  // Main-process PTYs are shared by every BrowserWindow. A per-renderer id
+  // prevents a second window from replacing the first window's terminal.
+  const terminalId = useRef(`main-${uid()}`).current
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
   const [status, setStatus] = useState<ShimStatus>(INITIAL_STATUS)
   const [showSettings, setShowSettings] = useState(false)
@@ -169,7 +173,7 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <div className="titlebar">
-        <span className="titlebar__title">Argo IDE</span>
+        <span className="titlebar__title">ArgoIDE</span>
         <span className="titlebar__spacer" />
         <span className="status-line">
           <span className={`status-dot status-dot--${status.state}`} />
@@ -181,6 +185,9 @@ export default function App(): JSX.Element {
               : status.state}
           </span>
         </span>
+        <button className="icon-btn" onClick={() => window.api.app.newWindow()} title="New window (⌘N)">
+          <NewWindowIcon size={14} />
+        </button>
         <button
           className={`icon-btn${terminalOpen ? ' is-active' : ''}`}
           onClick={() => setTerminalOpen((v) => !v)}
@@ -236,7 +243,7 @@ export default function App(): JSX.Element {
             />
             <div style={{ height: terminalHeight, flex: '0 0 auto', minHeight: 0 }}>
               <TerminalPanel
-                id="main"
+                id={terminalId}
                 cwd={root}
                 resizeNonce={terminalNonce}
                 onToggle={() => setTerminalOpen(false)}

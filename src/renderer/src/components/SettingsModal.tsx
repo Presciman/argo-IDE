@@ -92,8 +92,9 @@ export default function SettingsModal({ settings, status, onSave, onClose }: Pro
                   onChange={(e) => set('shimCommand', e.target.value)}
                 />
                 <div className="field__hint">
-                  Usually <span className="mono">argo-shim</span>. Use an absolute path if it is not
-                  on the PATH that GUI apps inherit.
+                  Usually <span className="mono">argo-shim</span>. If only uvx is installed, the app
+                  automatically falls back to <span className="mono">~/.local/bin/uvx argo-shim</span>.
+                  You can still use an absolute path to override it.
                 </div>
               </div>
 

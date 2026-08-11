@@ -115,6 +115,17 @@ export interface ShimStatus {
   /** True when a token was found in ~/.claude/settings.json. */
   hasToken: boolean
   message: string
+  /** True when this app started the shim and holds its PTY. */
+  ownsProcess: boolean
+}
+
+/** A process currently listening on the shim's port. */
+export interface ShimOccupant {
+  pid: number
+  /** Process name from lsof, e.g. `argo-shim` or `python3.12`. */
+  command: string
+  /** True when this app started it, rather than an earlier run or a terminal. */
+  isOurs: boolean
 }
 
 // ---------------------------------------------------------------- streaming

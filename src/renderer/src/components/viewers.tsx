@@ -66,47 +66,17 @@ export function CodeViewer({ path }: { path: string }): JSX.Element {
 /**
  * PDF preview via Chromium's built-in viewer.
  *
- * The file is passed as a data: URL rather than file://, because the renderer
- * runs from a custom origin and cannot navigate a frame to file:// under our
- * CSP. That means the whole PDF is loaded into memory — fine for papers and
- * docs, which is what this pane is for.
+ * The file is served over the app's `argo-file:` scheme (see
+ * src/main/protocol.ts). A `data:` URL cannot work here — Chromium refuses to
+ * navigate a frame to one — and `file://` is unreachable from the renderer's
+ * origin. The scheme also streams and supports range requests, so a large
+ * document starts rendering before it has fully loaded.
  */
 export function PdfViewer({ path }: { path: string }): JSX.Element {
-  const [src, setSrc] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setSrc(null)
-    setError(null)
-    window.api.fs
-      .dataUrl(path, 'application/pdf')
-      .then((url) => !cancelled && setSrc(url))
-      .catch((err: Error) => !cancelled && setError(err.message))
-    return () => {
-      cancelled = true
-    }
-  }, [path])
-
-  if (error) return <div className="empty-state">{error}</div>
-  if (!src) return <div className="empty-state">Loading PDF…</div>
-  return <iframe className="viewer-frame" src={src} title={path} />
+  return <iframe className="viewer-frame" src={window.api.fs.url(path)} title={path} />
 }
 
 export function ImageViewer({ path }: { path: string }): JSX.Element {
-  const [src, setSrc] = useState<string | null>(null)
-  const ext = path.split('.').pop()?.toLowerCase() ?? 'png'
-  const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
-
-  useEffect(() => {
-    let cancelled = false
-    setSrc(null)
-    window.api.fs.dataUrl(path, mime).then((url) => !cancelled && setSrc(url))
-    return () => {
-      cancelled = true
-    }
-  }, [path, mime])
-
   return (
     <div
       style={{
@@ -119,11 +89,11 @@ export function ImageViewer({ path }: { path: string }): JSX.Element {
         background: 'var(--bg-0)'
       }}
     >
-      {src ? (
-        <img src={src} alt={path} style={{ maxWidth: '100%', maxHeight: '100%' }} />
-      ) : (
-        <span style={{ color: 'var(--fg-2)' }}>Loading…</span>
-      )}
+      <img
+        src={window.api.fs.url(path)}
+        alt={path}
+        style={{ maxWidth: '100%', maxHeight: '100%' }}
+      />
     </div>
   )
 }

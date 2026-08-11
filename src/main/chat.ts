@@ -2,7 +2,7 @@ import { WebContents } from 'electron'
 import { request as httpRequest, ClientRequest } from 'http'
 import { request as httpsRequest } from 'https'
 import { ChatRequest, StreamEvent } from '../shared/types'
-import { loadSettings, resolveBaseUrl, readShimToken } from './settings'
+import { argoAuthHeaders, loadSettings, resolveBaseUrl } from './settings'
 
 /**
  * Streams chat completions from Argo (through the shim, or directly on the
@@ -31,14 +31,11 @@ export function stream(sender: WebContents, req: ChatRequest): void {
 
   const url = new URL(resolveBaseUrl(s) + '/v1/chat/completions')
   const send = url.protocol === 'https:' ? httpsRequest : httpRequest
-  const token = readShimToken()
-
   const headers: Record<string, string> = {
     'content-type': 'application/json',
-    accept: 'text/event-stream'
+    accept: 'text/event-stream',
+    ...argoAuthHeaders(s)
   }
-  if (token) headers.authorization = `Bearer ${token}`
-  if (s.celsUsername.trim()) headers['x-api-key'] = s.celsUsername.trim()
 
   const payload = JSON.stringify({
     model: req.model,

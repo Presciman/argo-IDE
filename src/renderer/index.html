@@ -2,11 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Argo IDE</title>
+    <title>ArgoIDE</title>
     <!--
       Locked-down CSP. `unsafe-inline` for styles is required by Monaco, which
       injects its theme rules at runtime. Scripts stay strict.
       connect-src allows the local shim and the intranet Argo host.
+      argo-file: is our own scheme for previewing local PDFs and images; it is
+      framed by the viewer pane, so it needs frame-src as well as img-src.
     -->
     <meta
       http-equiv="Content-Security-Policy"
@@ -14,8 +16,9 @@
                script-src 'self';
                style-src 'self' 'unsafe-inline';
                font-src 'self' data:;
-               img-src 'self' data: blob:;
-               connect-src 'self' http://127.0.0.1:* https://apps.inside.anl.gov;
+               img-src 'self' data: blob: argo-file:;
+               frame-src 'self' argo-file:;
+               connect-src 'self' argo-file: http://127.0.0.1:* https://apps.inside.anl.gov;
                worker-src 'self' blob:;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

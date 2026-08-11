@@ -1,4 +1,15 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import {
+  app,
+  shell,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  nativeImage,
+  Menu,
+  session,
+  type MediaAccessPermissionRequest,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
@@ -13,6 +24,10 @@ import * as chat from './chat'
 import * as files from './files'
 import * as terminal from './terminal'
 import * as sessions from './sessions'
+import { registerScheme, registerHandler } from './protocol'
+
+// Privileged schemes must be declared before the app is ready.
+registerScheme()
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -28,7 +43,10 @@ function createWindow(): void {
       sandbox: false,
       // The third pane embeds arbitrary web pages in a <webview>, which is
       // disabled by default in modern Electron.
-      webviewTag: true
+      webviewTag: true,
+      // Chromium's bundled PDF viewer is a plugin; without this the PDF pane
+      // downloads the file instead of rendering it.
+      plugins: true
     }
   })
 
@@ -48,7 +66,90 @@ function createWindow(): void {
   }
 }
 
+/** Native File -> New Window support, including the standard macOS shortcut. */
+function registerAppMenu(): void {
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
+    {
+      label: 'File',
+      submenu: [
+        { label: 'New Window', accelerator: 'CmdOrCtrl+N', click: () => createWindow() },
+        { type: 'separator' },
+        { role: process.platform === 'darwin' ? 'close' : 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'zoom' }]
+    }
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
+/** Allow microphone-only access for ArgoIDE renderers, never embedded webviews. */
+function registerVoicePermissions(): void {
+  const appSession = session.defaultSession
+  appSession.setPermissionCheckHandler((contents, permission, _origin, details) => {
+    const trusted = contents !== null && BrowserWindow.fromWebContents(contents) !== null
+    return trusted && permission === 'media' && details.mediaType !== 'video'
+  })
+  appSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const media = details as MediaAccessPermissionRequest
+    const trusted = BrowserWindow.fromWebContents(contents) !== null
+    callback(
+      trusted &&
+        permission === 'media' &&
+        !(media.mediaTypes ?? []).includes('video')
+    )
+  })
+}
+
 function registerIpc(): void {
+  // --------------------------------------------------------------- window
+  ipcMain.on('window:new', () => createWindow())
+
   // -------------------------------------------------------------- settings
   ipcMain.handle('settings:get', () => loadSettings())
   ipcMain.handle('settings:save', (_e, patch: Partial<AppSettings>) => saveSettings(patch))
@@ -56,7 +157,9 @@ function registerIpc(): void {
   // ------------------------------------------------------------------ shim
   ipcMain.handle('shim:status', () => shim.getStatus())
   ipcMain.handle('shim:connect', () => shim.connect())
+  ipcMain.handle('shim:useExternal', () => shim.useExternal())
   ipcMain.handle('shim:disconnect', () => shim.disconnect())
+  ipcMain.handle('shim:occupants', () => shim.listOccupants())
   ipcMain.handle('shim:verify', () => shim.verify())
   ipcMain.on('shim:input', (_e, data: string) => shim.writeToShim(data))
 
@@ -104,11 +207,26 @@ function registerIpc(): void {
   ipcMain.handle('sessions:delete', (_e, id: string) => sessions.remove(id))
 }
 
+/**
+ * In a packaged build the icon comes from the bundled .icns. `electron-vite
+ * dev` runs under the stock Electron binary, though, so the dock shows its
+ * default icon unless we set one explicitly.
+ */
+function setDevDockIcon(): void {
+  if (!is.dev || process.platform !== 'darwin' || !app.dock) return
+  const icon = nativeImage.createFromPath(join(app.getAppPath(), 'build', 'icon.png'))
+  if (!icon.isEmpty()) app.dock.setIcon(icon)
+}
+
 void app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.argo.ide')
+  setDevDockIcon()
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
+  registerHandler()
   registerIpc()
+  registerAppMenu()
+  registerVoicePermissions()
   createWindow()
 
   app.on('activate', () => {

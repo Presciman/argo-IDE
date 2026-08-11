@@ -1,5 +1,5 @@
-import { JSX, useEffect, useRef, useState } from 'react'
-import { AppSettings, ShimStatus } from '../../../shared/types'
+import { JSX, useCallback, useEffect, useRef, useState } from 'react'
+import { AppSettings, ShimOccupant, ShimStatus } from '../../../shared/types'
 import { CloseIcon } from './Icons'
 
 interface Props {
@@ -19,6 +19,8 @@ interface Props {
 export default function ConnectModal({ settings, status, onClose }: Props): JSX.Element {
   const [log, setLog] = useState('')
   const [reply, setReply] = useState('')
+  const [occupants, setOccupants] = useState<ShimOccupant[]>([])
+  const [busy, setBusy] = useState(false)
   const consoleRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -27,6 +29,17 @@ export default function ConnectModal({ settings, status, onClose }: Props): JSX.
     const ansi = /\x1b\[[0-9;?]*[A-Za-z]|\r/g
     return window.api.shim.onOutput((chunk) => setLog((prev) => prev + chunk.replace(ansi, '')))
   }, [])
+
+  const refreshOccupants = useCallback(() => {
+    void window.api.shim.occupants().then(setOccupants)
+  }, [])
+
+  // Re-check on open and whenever the connection state moves: a shim left over
+  // from a previous run is exactly the thing the user needs to see here, and
+  // it's also what makes Connect fail with a port conflict.
+  useEffect(() => {
+    refreshOccupants()
+  }, [refreshOccupants, status.state, settings.useShim])
 
   // Pin to the bottom so the Duo prompt is always the visible line.
   useEffect(() => {
@@ -41,6 +54,31 @@ export default function ConnectModal({ settings, status, onClose }: Props): JSX.
   }
 
   const connecting = status.state === 'connecting'
+  const portBusy = occupants.length > 0
+  // A foreign listener is a Terminal-launched shim. It is adopted, never
+  // stopped, by this dialog.
+  const foreign = occupants.filter((o) => !o.isOurs)
+  const usingExternal = status.state === 'connected' && foreign.length > 0 && !status.ownsProcess
+
+  const stopIdeShim = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      await window.api.shim.disconnect()
+    } finally {
+      setBusy(false)
+      refreshOccupants()
+    }
+  }
+
+  const useTerminalShim = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      await window.api.shim.useExternal()
+    } finally {
+      setBusy(false)
+      refreshOccupants()
+    }
+  }
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -70,6 +108,24 @@ export default function ConnectModal({ settings, status, onClose }: Props): JSX.
           )}
 
           {status.state === 'error' && <div className="banner banner--err">{status.message}</div>}
+
+          {settings.useShim && portBusy && (
+            <div className="banner banner--info">
+              Port <span className="mono">{status.port}</span> is in use by{' '}
+              {occupants.map((o, i) => (
+                <span key={o.pid}>
+                  {i > 0 && ', '}
+                  <span className="mono">
+                    {o.command} (pid {o.pid})
+                  </span>
+                  {o.isOurs && ' — started by this app'}
+                </span>
+              ))}
+              .{' '}
+              {foreign.length > 0 &&
+                'This Terminal shim can be reused without starting or owning another shim in the IDE.'}
+            </div>
+          )}
 
           {settings.useShim && (
             <div className="banner banner--warn">
@@ -117,21 +173,37 @@ export default function ConnectModal({ settings, status, onClose }: Props): JSX.
           <button className="btn" onClick={() => void window.api.shim.verify()}>
             Check connection
           </button>
-          {settings.useShim && (
-            <button className="btn btn--danger" onClick={() => void window.api.shim.disconnect()}>
-              Stop
+          {settings.useShim && status.ownsProcess && (
+            <button
+              className="btn btn--danger"
+              disabled={busy}
+              title="Stop only the argo-shim process launched by this IDE"
+              onClick={() => void stopIdeShim()}
+            >
+              {busy ? 'Stopping…' : 'Stop IDE shim'}
             </button>
           )}
-          <button
-            className="btn btn--primary"
-            disabled={connecting || !settings.useShim}
-            onClick={() => {
-              setLog('')
-              void window.api.shim.connect()
-            }}
-          >
-            {connecting ? 'Connecting…' : 'Connect'}
-          </button>
+          {foreign.length > 0 ? (
+            <button
+              className="btn btn--primary"
+              disabled={busy || connecting || usingExternal || !settings.useShim}
+              title="Leave the Terminal process running and use it for Argo requests"
+              onClick={() => void useTerminalShim()}
+            >
+              {usingExternal ? 'Using Terminal shim' : busy || connecting ? 'Checking…' : 'Use Terminal shim'}
+            </button>
+          ) : (
+            <button
+              className="btn btn--primary"
+              disabled={connecting || busy || !settings.useShim}
+              onClick={() => {
+                setLog('')
+                void window.api.shim.connect().then(refreshOccupants)
+              }}
+            >
+              {connecting ? 'Connecting…' : 'Start IDE shim'}
+            </button>
+          )}
         </div>
       </div>
     </div>

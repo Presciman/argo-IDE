@@ -1,6 +1,9 @@
 node_modules/
 out/
 dist/
+
+# Intermediate output of `iconutil`; build/icon.icns is the committed artifact.
+build/icon.iconset/
 .DS_Store
 *.log
 .vite/

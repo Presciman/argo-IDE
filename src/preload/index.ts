@@ -8,9 +8,11 @@ import {
   DirEntry,
   PtySpawnOptions,
   SessionSummary,
+  ShimOccupant,
   ShimStatus,
   StreamEvent
 } from '../shared/types'
+import { fileUrl } from '../shared/fileUrl'
 
 /**
  * The only surface the renderer gets. Everything is an explicit named method —
@@ -18,6 +20,10 @@ import {
  * can't reach IPC channels this file doesn't list.
  */
 const api = {
+  app: {
+    newWindow: (): void => ipcRenderer.send('window:new')
+  },
+
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
     save: (patch: Partial<AppSettings>): Promise<AppSettings> =>
@@ -27,7 +33,12 @@ const api = {
   shim: {
     status: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:status'),
     connect: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:connect'),
+    /** Stop only our managed child, then health-check and use a Terminal shim. */
+    useExternal: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:useExternal'),
+    /** Detach from our own shim; leaves a shim we did not start running. */
     disconnect: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:disconnect'),
+    /** Processes currently listening on the shim port, ours or not. */
+    occupants: (): Promise<ShimOccupant[]> => ipcRenderer.invoke('shim:occupants'),
     verify: (): Promise<ShimStatus> => ipcRenderer.invoke('shim:verify'),
     /** Send a line into the shim's PTY — used to answer the Duo prompt. */
     input: (data: string): void => ipcRenderer.send('shim:input', data),
@@ -64,6 +75,11 @@ const api = {
     readText: (path: string): Promise<string> => ipcRenderer.invoke('fs:readText', path),
     dataUrl: (path: string, mime: string): Promise<string> =>
       ipcRenderer.invoke('fs:dataUrl', path, mime),
+    /**
+     * A streamable URL for a local PDF or image. Pure string building — no IPC
+     * round trip — but it lives here so the scheme stays a main-process detail.
+     */
+    url: (path: string): string => fileUrl(path),
     classify: (path: string): Promise<'text' | 'image' | 'pdf' | 'binary'> =>
       ipcRenderer.invoke('fs:classify', path),
     attach: (path: string, id: string): Promise<Attachment> =>

@@ -611,6 +611,21 @@ select {
   margin-top: 7px;
 }
 
+/* Portaled to <body> so narrow chat panes and overflow clipping cannot cover it. */
+.composer-menu {
+  position: fixed;
+  width: min(250px, calc(100vw - 16px));
+  max-width: none;
+  padding: 5px;
+  z-index: 200;
+}
+
+.composer__voice-status {
+  margin-top: 4px;
+  color: var(--err);
+  font-size: 10.5px;
+}
+
 .composer__send {
   width: 28px;
   height: 28px;

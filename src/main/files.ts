@@ -1,12 +1,13 @@
-import { lstat, open, readdir, readFile, realpath, stat } from 'fs/promises'
-import { basename, extname, join, relative, resolve, sep } from 'path'
-import { Attachment, DirEntry, ProjectContext, ProjectFile } from '../shared/types'
+import { lstat, open, readdir, readFile, realpath, stat, writeFile } from 'fs/promises'
+import { basename, dirname, extname, join, relative, resolve, sep } from 'path'
+import { Attachment, DirEntry, ProjectContext, ProjectFile, WriteResult } from '../shared/types'
 
 /** Files bigger than this are never inlined into a prompt. */
 const MAX_ATTACHMENT_BYTES = 512 * 1024
 const MAX_PROJECT_FILE_BYTES = 512 * 1024
 const MAX_PROJECT_TREE_ENTRIES = 4_000
 const MAX_PROJECT_TREE_CHARS = 120_000
+const MAX_EDITABLE_BYTES = 5 * 1024 * 1024
 
 // Keep generated dependencies visible as a directory name, but do not spend
 // the model's context window enumerating tens of thousands of vendor files.
@@ -201,12 +202,99 @@ export async function readProjectFile(
   }
 }
 
+/**
+ * Write a file on the AI Agent's behalf, confined to the open project.
+ *
+ * Separate from `writeTextFile` because that one realpath()s the target, which
+ * throws for a file that does not exist yet — and the agent legitimately
+ * creates files. Here the *parent directory* is resolved and jailed instead,
+ * so a symlinked directory still cannot be used to escape the project root.
+ * Parent directories are never created implicitly: an agent typo should fail
+ * loudly rather than scatter empty directories through the project.
+ *
+ * Returns the previous contents (null when creating) so the caller can show
+ * the user what changed.
+ */
+export async function writeProjectFile(
+  requestedRoot: string,
+  requestedPath: string,
+  content: string
+): Promise<{ result: WriteResult; previous: string | null; absolutePath: string }> {
+  const root = await realpath(requestedRoot)
+  const requested = resolve(root, requestedPath)
+
+  let parent: string
+  try {
+    parent = await realpath(dirname(requested))
+  } catch {
+    throw new Error(`The folder for "${requestedPath}" does not exist in the project.`)
+  }
+  if (parent !== root && !parent.startsWith(`${root}${sep}`)) {
+    throw new Error('Refusing to write outside the open Explorer folder.')
+  }
+
+  const target = join(parent, basename(requested))
+  if (classify(target) !== 'text') {
+    throw new Error('Only supported text files can be written.')
+  }
+
+  const bytes = Buffer.byteLength(content, 'utf8')
+  if (bytes > MAX_EDITABLE_BYTES) {
+    throw new Error(`Content is ${(bytes / 1e6).toFixed(1)} MB — too large to write.`)
+  }
+
+  let previous: string | null = null
+  try {
+    const info = await stat(target)
+    if (!info.isFile()) throw new Error('The write target is not a file.')
+    previous = await readFile(target, 'utf8')
+  } catch (err) {
+    // ENOENT is the create case; anything else is a real problem.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+
+  await writeFile(target, content, 'utf8')
+  return {
+    result: { relativePath: relative(root, target), created: previous === null, bytes },
+    previous,
+    absolutePath: target
+  }
+}
+
 export async function readTextFile(path: string): Promise<string> {
   const info = await stat(path)
-  if (info.size > 5 * 1024 * 1024) {
+  if (info.size > MAX_EDITABLE_BYTES) {
     throw new Error(`File is ${(info.size / 1e6).toFixed(1)} MB — too large to open in the editor.`)
   }
   return readFile(path, 'utf8')
+}
+
+/**
+ * Save an existing text file that belongs to the Explorer root it came from.
+ * Resolving both paths prevents a renderer from writing through a symlink that
+ * escapes the user-approved project directory.
+ */
+export async function writeTextFile(
+  requestedRoot: string,
+  requestedPath: string,
+  content: string
+): Promise<void> {
+  const root = await realpath(requestedRoot)
+  const target = await realpath(requestedPath)
+  if (target === root || !target.startsWith(`${root}${sep}`)) {
+    throw new Error('Cannot save a file outside its Explorer folder.')
+  }
+
+  const info = await stat(target)
+  if (!info.isFile()) throw new Error('The editor target is not a file.')
+  if (classify(target) !== 'text') throw new Error('Only supported text files can be edited.')
+
+  const bytes = Buffer.byteLength(content, 'utf8')
+  if (bytes > MAX_EDITABLE_BYTES) {
+    throw new Error(`Edited content is ${(bytes / 1e6).toFixed(1)} MB — too large to save.`)
+  }
+
+  await writeFile(target, content, 'utf8')
 }
 
 /** Read a file as a data URL, for the PDF and image viewers. */

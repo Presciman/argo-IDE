@@ -2,22 +2,16 @@ import { JSX, useCallback, useEffect, useRef, useState } from 'react'
 import { AppSettings, DEFAULT_SETTINGS, ShimStatus } from '../../shared/types'
 import FileExplorer from './components/FileExplorer'
 import ChatPane from './components/ChatPane'
-import ViewerPane, { ViewerTab } from './components/ViewerPane'
+import EditorPane from './components/EditorPane'
 import TerminalPanel from './components/TerminalPanel'
 import SettingsModal from './components/SettingsModal'
 import ConnectModal from './components/ConnectModal'
 import Splitter from './components/Splitter'
+import * as layout from './editorLayout'
+import { EditorLayout, EditorTab } from './editorLayout'
 import { NewWindowIcon, TerminalIcon } from './components/Icons'
 
 const uid = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-
-/** Horizontal viewer rows and which tab is active in each. Kept in lockstep. */
-interface ViewerState {
-  groups: ViewerTab[][]
-  activeIds: (string | null)[]
-}
-
-const MAX_VIEWER_ROWS = 3
 
 const INITIAL_STATUS: ShimStatus = {
   state: 'disconnected',
@@ -40,12 +34,12 @@ export default function App(): JSX.Element {
   const [root, setRoot] = useState<string | null>(null)
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
 
-  // Viewer state. Rows and their active tabs are one object rather than two
-  // pieces of state: every mutation touches both, and a React state updater
-  // must stay pure (StrictMode invokes it twice), so they cannot be nested.
-  const [viewer, setViewer] = useState<ViewerState>({ groups: [[]], activeIds: [null] })
+  // Editor state. The whole split layout — rows, cells, sizes, focus — is one
+  // object, because every mutation touches several of those at once and a
+  // React state updater must stay pure (StrictMode invokes it twice).
+  const [editor, setEditor] = useState<EditorLayout>(layout.initialLayout)
 
-  // Column widths as flex weights: explorer | chat | viewer.
+  // Column widths as flex weights: explorer | chat | editor.
   const [columnWeights, setColumnWeights] = useState<[number, number, number]>([0.9, 1.15, 1.4])
   const [terminalHeight, setTerminalHeight] = useState(240)
   const [terminalOpen, setTerminalOpen] = useState(true)
@@ -71,81 +65,77 @@ export default function App(): JSX.Element {
     void window.api.shim.verify()
   }, [])
 
-  // ---------------------------------------------------------------- viewer
+  // ---------------------------------------------------------------- editor
 
-  const openFile = useCallback(async (path: string) => {
-    setSelectedPath(path)
-    const kind = await window.api.fs.classify(path)
-    const label = path.split('/').pop() ?? path
-
-    setViewer((prev) => {
-      // Focus an already-open tab instead of opening a duplicate.
-      const existing = prev.groups[0].find((t) => t.target === path && t.kind !== 'web')
-      if (existing) {
-        return { ...prev, activeIds: [existing.id, ...prev.activeIds.slice(1)] }
-      }
-      const tab: ViewerTab = { id: uid(), kind, target: path, label }
-      return {
-        groups: [[...prev.groups[0], tab], ...prev.groups.slice(1)],
-        activeIds: [tab.id, ...prev.activeIds.slice(1)]
-      }
-    })
-  }, [])
+  const openFile = useCallback(
+    async (path: string) => {
+      setSelectedPath(path)
+      const kind = await window.api.fs.classify(path)
+      const label = path.split('/').pop() ?? path
+      const tab: EditorTab = { id: uid(), kind, target: path, label, root: root ?? undefined }
+      // openTab focuses an already-open copy rather than duplicating it.
+      setEditor((prev) => layout.openTab(prev, tab))
+    },
+    [root]
+  )
 
   const pickRoot = useCallback(async () => {
     const dir = await window.api.fs.pickFolder()
     if (dir) setRoot(dir)
   }, [])
 
-  const newWebTab = useCallback((gi: number) => {
-    setViewer((prev) => {
-      const tab: ViewerTab = {
-        id: uid(),
-        kind: 'web',
-        target: 'https://www.alcf.anl.gov',
-        label: 'Browser'
-      }
-      return {
-        groups: prev.groups.map((g, i) => (i === gi ? [...g, tab] : g)),
-        activeIds: prev.activeIds.map((id, i) => (i === gi ? tab.id : id))
-      }
-    })
+  const newWebTab = useCallback((groupId: string) => {
+    const tab: EditorTab = {
+      id: uid(),
+      kind: 'web',
+      target: 'https://www.alcf.anl.gov',
+      label: 'Browser'
+    }
+    setEditor((prev) => layout.openTab(prev, tab, groupId))
   }, [])
 
-  const closeTab = useCallback((gi: number, tabId: string) => {
-    setViewer((prev) => {
-      const remaining = prev.groups[gi].filter((t) => t.id !== tabId)
-      return {
-        groups: prev.groups.map((g, i) => (i === gi ? remaining : g)),
-        // Closing the active tab falls back to the last one still open.
-        activeIds: prev.activeIds.map((id, i) =>
-          i === gi && id === tabId ? (remaining.at(-1)?.id ?? null) : id
-        )
-      }
-    })
+  const closeTab = useCallback((groupId: string, tabId: string) => {
+    setEditor((prev) => layout.closeTab(prev, groupId, tabId))
   }, [])
 
-  const activateTab = useCallback((gi: number, tabId: string) => {
-    setViewer((prev) => ({
-      ...prev,
-      activeIds: prev.activeIds.map((id, i) => (i === gi ? tabId : id))
-    }))
+  const activateTab = useCallback((groupId: string, tabId: string) => {
+    setEditor((prev) => layout.activateTab(prev, groupId, tabId))
   }, [])
 
-  const splitViewer = useCallback(() => {
-    setViewer((prev) =>
-      prev.groups.length >= MAX_VIEWER_ROWS
-        ? prev
-        : { groups: [...prev.groups, []], activeIds: [...prev.activeIds, null] }
-    )
+  const updateTab = useCallback((groupId: string, tabId: string, patch: Partial<EditorTab>) => {
+    setEditor((prev) => layout.updateTab(prev, groupId, tabId, patch))
   }, [])
 
-  const unsplitViewer = useCallback((gi: number) => {
-    setViewer((prev) => ({
-      groups: prev.groups.filter((_, i) => i !== gi),
-      activeIds: prev.activeIds.filter((_, i) => i !== gi)
-    }))
+  const moveTab = useCallback((sourceGroupId: string, targetGroupId: string, tabId: string) => {
+    setEditor((prev) => layout.moveTab(prev, sourceGroupId, targetGroupId, tabId))
   }, [])
+
+  const splitEditorRight = useCallback((groupId: string) => {
+    setEditor((prev) => layout.splitRight(prev, groupId))
+  }, [])
+
+  const splitEditorDown = useCallback((groupId: string) => {
+    setEditor((prev) => layout.splitDown(prev, groupId))
+  }, [])
+
+  const closeEditorGroup = useCallback((groupId: string) => {
+    setEditor((prev) => layout.closeGroup(prev, groupId))
+  }, [])
+
+  const focusEditorGroup = useCallback((groupId: string) => {
+    setEditor((prev) => (prev.focusedId === groupId ? prev : { ...prev, focusedId: groupId }))
+  }, [])
+
+  const resizeEditorRows = useCallback((index: number, deltaPx: number, hostHeight: number) => {
+    setEditor((prev) => layout.resizeRows(prev, index, deltaPx, hostHeight))
+  }, [])
+
+  const resizeEditorColumns = useCallback(
+    (rowId: string, index: number, deltaPx: number, hostWidth: number) => {
+      setEditor((prev) => layout.resizeColumns(prev, rowId, index, deltaPx, hostWidth))
+    },
+    []
+  )
 
   // --------------------------------------------------------------- layout
 
@@ -223,14 +213,19 @@ export default function App(): JSX.Element {
           <Splitter orientation="v" onDrag={(d) => resizeColumn(1, d)} />
 
           <div style={{ flex: `${columnWeights[2]} 1 0`, display: 'flex', minWidth: 0 }}>
-            <ViewerPane
-              groups={viewer.groups}
-              activeIds={viewer.activeIds}
+            <EditorPane
+              layout={editor}
               onActivate={activateTab}
               onClose={closeTab}
+              onUpdateTab={updateTab}
+              onMoveTab={moveTab}
               onNewWebTab={newWebTab}
-              onSplit={splitViewer}
-              onUnsplit={unsplitViewer}
+              onSplitRight={splitEditorRight}
+              onSplitDown={splitEditorDown}
+              onCloseGroup={closeEditorGroup}
+              onFocusGroup={focusEditorGroup}
+              onResizeRows={resizeEditorRows}
+              onResizeColumns={resizeEditorColumns}
             />
           </div>
         </div>
@@ -244,7 +239,7 @@ export default function App(): JSX.Element {
             />
             <div style={{ height: terminalHeight, flex: '0 0 auto', minHeight: 0 }}>
               <TerminalPanel
-                id={terminalId}
+                idPrefix={terminalId}
                 cwd={root}
                 resizeNonce={terminalNonce}
                 onToggle={() => setTerminalOpen(false)}

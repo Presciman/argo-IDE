@@ -89,6 +89,14 @@ export interface ChatMessage {
   attachments?: Attachment[]
   /** Set on an assistant message that failed, instead of content. */
   error?: string
+  /**
+   * What the agent did to produce this reply: reasoning, file reads, writes,
+   * and commands. Rendered live in the trace panel, then collapsed onto the
+   * finished message. Absent on messages written before traces existed.
+   */
+  trace?: TraceStep[]
+  /** Total wall-clock ms the turn took. Shown in the collapsed summary. */
+  durationMs?: number
 }
 
 export interface ChatSession {
@@ -98,6 +106,8 @@ export interface ChatSession {
   updatedAt: number
   model: string
   agentId: string
+  /** Absent in sessions saved before agent modes existed; treated as 'manual'. */
+  mode?: AgentMode
   messages: ChatMessage[]
 }
 
@@ -120,6 +130,120 @@ export interface AgentPreset {
   name: string
   description: string
   systemPrompt: string
+}
+
+// --------------------------------------------------------------- agent tools
+
+/**
+ * How much the agent may do without stopping to ask.
+ *
+ * The mode is a property of a chat session, not of the app: "full access" in a
+ * scratch directory should never silently carry over to tomorrow's work.
+ */
+export type AgentMode = 'manual' | 'approve' | 'full'
+
+export const AGENT_MODES: { id: AgentMode; name: string; description: string }[] = [
+  {
+    id: 'manual',
+    name: 'Manual',
+    description: 'Confirm every file read, file write, and command.'
+  },
+  {
+    id: 'approve',
+    name: 'Approve for me',
+    description: 'Reads happen automatically. Writes and commands need your approval.'
+  },
+  {
+    id: 'full',
+    name: 'Full access',
+    description: 'Reads, writes, and commands run unattended. Risky commands still ask.'
+  }
+]
+
+/** A tool invocation parsed out of an assistant message. */
+export type ToolCall =
+  | { tool: 'read_file'; path: string }
+  | { tool: 'write_file'; path: string; content: string }
+  | { tool: 'run'; command: string; why?: string }
+  | { tool: 'ask_user'; question: string; placeholder?: string }
+
+export type ToolName = ToolCall['tool']
+
+/** What a tool produced, in the form fed back to the model. */
+export interface ToolResult {
+  ok: boolean
+  /** Text handed back to the model as the next user turn. */
+  text: string
+  /** Short human-readable outcome for the trace, e.g. "4.1 KB" or "exit 0". */
+  detail?: string
+}
+
+/** One line in the live progress panel. */
+export interface TraceStep {
+  id: string
+  kind: 'reasoning' | 'read' | 'write' | 'run' | 'ask' | 'info' | 'error'
+  /** Single-line label, e.g. `read src/main/chat.ts`. */
+  label: string
+  status: 'running' | 'done' | 'failed' | 'denied'
+  /** Right-aligned annotation: `4.1 KB`, `+18 −4`, `exit 0`. */
+  detail?: string
+  /** Long output (command stdout, reasoning text) shown when expanded. */
+  body?: string
+  startedAt: number
+  endedAt?: number
+}
+
+/** A blocking question the agent is waiting on, rendered inline in the log. */
+export type PendingInteraction =
+  | { kind: 'approval'; id: string; call: ToolCall; diff?: DiffSummary; reason?: string }
+  | { kind: 'question'; id: string; question: string; placeholder?: string }
+
+export type ApprovalChoice = 'allow' | 'allow-all' | 'deny'
+
+/** Line counts and a bounded preview for a proposed write. */
+export interface DiffSummary {
+  added: number
+  removed: number
+  /** True when the target does not exist yet. */
+  created: boolean
+  preview: DiffLine[]
+  previewTruncated: boolean
+}
+
+export interface DiffLine {
+  kind: 'add' | 'remove' | 'context'
+  text: string
+}
+
+/** Result of one agent-run command. */
+export interface ExecResult {
+  exitCode: number
+  output: string
+  /** Output exceeded the capture cap and was cut short. */
+  truncated: boolean
+  /** The command hit the wall-clock limit and was killed. */
+  timedOut: boolean
+  durationMs: number
+}
+
+export interface ExecRequest {
+  id: string
+  command: string
+  /** Commands always run in the folder open in the Explorer. */
+  cwd: string
+  /**
+   * Set only after the user approved this exact command. Commands on the
+   * always-ask denylist are refused by the main process without it, whatever
+   * the renderer believes the current mode to be.
+   */
+  userApproved: boolean
+}
+
+/** Written file, with the counts needed to describe the change afterwards. */
+export interface WriteResult {
+  relativePath: string
+  created: boolean
+  bytes: number
 }
 
 // ---------------------------------------------------------------- connection
@@ -153,6 +277,13 @@ export interface ShimOccupant {
 /** Chunks pushed from main -> renderer over a per-request IPC channel. */
 export type StreamEvent =
   | { type: 'delta'; text: string }
+  /**
+   * Chain-of-thought from a reasoning model, when the provider sends it.
+   * Best-effort: most models emit none, and the trace then shows only the
+   * steps ArgoIDE itself performs. Never synthesized.
+   */
+  | { type: 'reasoning'; text: string }
+  | { type: 'usage'; promptTokens?: number; completionTokens?: number }
   | { type: 'done' }
   | { type: 'error'; message: string }
 

@@ -14,7 +14,8 @@ import { childEnv } from './settings'
 
 const sessions = new Map<string, pty.IPty>()
 
-function defaultShell(): string {
+/** The user's login shell, falling back through the standard system shells. */
+export function defaultShell(): string {
   const candidates = [
     process.env.SHELL,
     process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash',
@@ -32,7 +33,8 @@ function defaultShell(): string {
   return '/bin/sh'
 }
 
-function workingDirectory(requested?: string): string {
+/** A readable directory to start in, falling back to home. */
+export function workingDirectory(requested?: string): string {
   const fallback = userInfo().homedir
   if (!requested) return fallback
   try {

@@ -1,6 +1,13 @@
 import { JSX, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AgentPreset, ArgoModel, Attachment, FolderGrant } from '../../../shared/types'
+import {
+  AgentMode,
+  AGENT_MODES,
+  AgentPreset,
+  ArgoModel,
+  Attachment,
+  FolderGrant
+} from '../../../shared/types'
 import { CloseIcon, FolderIcon, MicIcon, PlusIcon, SendIcon, StopIcon, WaveIcon } from './Icons'
 
 interface Props {
@@ -10,6 +17,9 @@ interface Props {
   agents: AgentPreset[]
   agentId: string
   onAgentChange: (id: string) => void
+  /** How much the agent may do without stopping to ask. */
+  mode: AgentMode
+  onModeChange: (mode: AgentMode) => void
   attachments: Attachment[]
   onAttach: (paths: string[]) => void
   onRemoveAttachment: (id: string) => void
@@ -319,6 +329,19 @@ export default function Composer(props: Props): JSX.Element {
           {props.agents.map((a) => (
             <option key={a.id} value={a.id} title={a.description}>
               {a.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className={`select select--bare${props.mode === 'full' ? ' select--warn' : ''}`}
+          value={props.mode}
+          onChange={(e) => props.onModeChange(e.target.value as AgentMode)}
+          title={AGENT_MODES.find((m) => m.id === props.mode)?.description}
+        >
+          {AGENT_MODES.map((m) => (
+            <option key={m.id} value={m.id} title={m.description}>
+              {m.name}
             </option>
           ))}
         </select>

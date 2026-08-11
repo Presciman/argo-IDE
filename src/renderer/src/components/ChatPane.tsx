@@ -1,20 +1,27 @@
 import { JSX, useCallback, useEffect, useRef, useState } from 'react'
 import {
+  AgentMode,
   AppSettings,
+  ApprovalChoice,
   ArgoModel,
   Attachment,
   ChatMessage,
   ChatSession,
   FolderGrant,
+  PendingInteraction,
   ProjectContext,
-  Role,
   SessionSummary,
-  ShimStatus
+  ShimStatus,
+  TraceStep
 } from '../../../shared/types'
 import { AGENT_PRESETS, findAgent } from '../agents'
+import { AgentLoop, Cancelled, WireMessage } from '../agentLoop'
+import { toolInstructions } from '../agentTools'
+import AgentTrace, { TraceSummary } from './AgentTrace'
 import Composer from './Composer'
+import InteractionBlock from './InteractionBlock'
 import SessionDrawer from './SessionDrawer'
-import { FolderIcon, GearIcon, MenuIcon, PlugIcon } from './Icons'
+import { GearIcon, MenuIcon, PlugIcon } from './Icons'
 
 interface Props {
   settings: AppSettings
@@ -25,9 +32,6 @@ interface Props {
 }
 
 const uid = (): string => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-const MAX_AGENT_FILE_READS = 8
-
-type WireMessage = { role: Role; content: string }
 
 function projectInstructions(context: ProjectContext | null): string {
   if (!context) {
@@ -44,22 +48,10 @@ function projectInstructions(context: ProjectContext | null): string {
 ${context.root}
 
 You can already see its recursive source tree below; do not ask the user to attach files that are listed here.
-${context.tree}${omitted}
-
-When you need the contents of a text file, output exactly one line and nothing else:
-[[ARGO_READ_FILE:path/relative/to/project]]
-
-ArgoIDE will securely read that file only from the open project and return its contents. You may repeat this for multiple files, one request at a time. Never claim to have read a file until ArgoIDE has returned it.`
+${context.tree}${omitted}`
 }
 
-function requestedProjectFile(text: string): string | null {
-  const match = text.match(
-    /^\s*(?:```(?:text)?\s*)?\[\[ARGO_READ_FILE:([^\]\r\n]+)\]\](?:\s*```)?\s*$/i
-  )
-  return match?.[1].trim() || null
-}
-
-function emptySession(model: string): ChatSession {
+function emptySession(model: string, mode: AgentMode = 'manual'): ChatSession {
   const now = Date.now()
   return {
     id: uid(),
@@ -68,6 +60,7 @@ function emptySession(model: string): ChatSession {
     updatedAt: now,
     model,
     agentId: AGENT_PRESETS[0].id,
+    mode,
     messages: []
   }
 }
@@ -115,10 +108,16 @@ export default function ChatPane({
   const [projectContextError, setProjectContextError] = useState<string | null>(null)
   const [indexingProject, setIndexingProject] = useState(false)
 
+  // Live turn state: the trace panel and any prompt the agent is blocked on.
+  const [trace, setTrace] = useState<TraceStep[]>([])
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
+  const [pending, setPending] = useState<PendingInteraction | null>(null)
+
   const logRef = useRef<HTMLDivElement>(null)
-  const activeRequest = useRef<string | null>(null)
-  const unsubscribe = useRef<(() => void) | null>(null)
   const voiceModeRef = useRef(false)
+  const loopRef = useRef<AgentLoop | null>(null)
+  /** Resolver for the interaction currently on screen. */
+  const resolveInteraction = useRef<((value: never) => void) | null>(null)
 
   /**
    * Mirror of `session` that is always current.
@@ -208,10 +207,10 @@ export default function ChatPane({
     if (el) el.scrollTop = el.scrollHeight
   }, [session.messages])
 
-  // Drop any in-flight stream if the pane unmounts.
+  // Drop any in-flight turn if the pane unmounts.
   useEffect(
     () => () => {
-      unsubscribe.current?.()
+      loopRef.current?.cancel()
       window.speechSynthesis?.cancel()
     },
     []
@@ -235,12 +234,34 @@ export default function ChatPane({
   )
 
   const stop = useCallback(() => {
-    if (activeRequest.current) window.api.chat.cancel(activeRequest.current)
-    unsubscribe.current?.()
-    unsubscribe.current = null
-    activeRequest.current = null
+    loopRef.current?.cancel()
+    loopRef.current = null
+    resolveInteraction.current = null
+    setPending(null)
     setStreaming(false)
+    setTurnStartedAt(null)
     window.speechSynthesis?.cancel()
+  }, [])
+
+  /**
+   * Show an inline prompt and block the turn until the user answers.
+   *
+   * The resolver is held in a ref rather than state because the loop awaits it
+   * across many renders; `stop()` drops it, which lets the pending promise be
+   * rejected and the turn unwind.
+   */
+  const interact = useCallback(<T,>(interaction: PendingInteraction): Promise<T> => {
+    return new Promise<T>((resolve) => {
+      resolveInteraction.current = resolve as (value: never) => void
+      setPending(interaction)
+    })
+  }, [])
+
+  const answerInteraction = useCallback((value: ApprovalChoice | string) => {
+    const resolve = resolveInteraction.current
+    resolveInteraction.current = null
+    setPending(null)
+    resolve?.(value as never)
   }, [])
 
   const send = useCallback(
@@ -272,154 +293,93 @@ export default function ChatPane({
       }))
       setAttachments([])
       setStreaming(true)
+      setTrace([])
+      setTurnStartedAt(Date.now())
 
-      // Mark the indexing phase as cancellable too. It is not a real network
-      // id, but cancel() safely ignores ids that are not in the main map.
-      const preparationId = uid()
-      activeRequest.current = preparationId
+      const patchAssistant = (patch: Partial<ChatMessage>): ChatSession =>
+        updateSession((prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => (m.id === assistantMsg.id ? { ...m, ...patch } : m))
+        }))
 
       void (async () => {
+        // Re-index before the turn: the tree in the system prompt should
+        // reflect files the user (or a previous turn) just created.
         let context = projectRoot ? projectContext : null
         if (projectRoot) {
+          setIndexingProject(true)
           try {
             context = await loadProjectContext()
             setProjectContext(context)
             setProjectContextError(null)
           } catch (err) {
             setProjectContextError((err as Error).message)
+          } finally {
+            setIndexingProject(false)
           }
         }
-        if (activeRequest.current !== preparationId) return
-        const workspaceContext = context
 
-        // The wire history excludes the placeholder we just added for the reply.
+        const mode = current.mode ?? 'manual'
         const history: WireMessage[] = withUser.messages
           .slice(0, -1)
           .map((m) => ({ role: m.role, content: m.content }))
-        const initialMessages: WireMessage[] = [
-          {
-            role: 'system',
-            content: `${findAgent(current.agentId).systemPrompt}\n\n${projectInstructions(workspaceContext)}`
-          },
-          ...history
-        ]
 
-        const finish = (requestId: string, patch: Partial<ChatMessage>): void => {
-          // A cancelled request may still deliver a trailing event; ignore it so
-          // a newer request's state isn't clobbered.
-          if (activeRequest.current !== requestId) return
+        const loop = new AgentLoop({
+          model: current.model,
+          systemPrompt: [
+            findAgent(current.agentId).systemPrompt,
+            projectInstructions(context),
+            toolInstructions(context, mode)
+          ].join('\n\n'),
+          history,
+          projectRoot: context?.root ?? null,
+          mode,
+          onProse: (prose) => patchAssistant({ content: prose, error: undefined }),
+          onTrace: setTrace,
+          requestApproval: (call, diff, reason) =>
+            interact<ApprovalChoice>({ kind: 'approval', id: uid(), call, diff, reason }),
+          askUser: (question, placeholder) =>
+            interact<string>({ kind: 'question', id: uid(), question, placeholder })
+        })
+        loopRef.current = loop
 
-          const next = updateSession((prev) => ({
-            ...prev,
-            updatedAt: Date.now(),
-            messages: prev.messages.map((m) =>
-              m.id === assistantMsg.id ? { ...m, ...patch } : m
-            )
-          }))
+        try {
+          const result = await loop.run()
+          if (loopRef.current !== loop) return
+          const next = patchAssistant({
+            content: result.text,
+            trace: result.trace.length ? result.trace : undefined,
+            durationMs: result.durationMs
+          })
           void window.api.sessions.write(next).then(refreshSummaries)
 
-          unsubscribe.current?.()
-          unsubscribe.current = null
-          activeRequest.current = null
-          setStreaming(false)
+          if (voiceModeRef.current && result.text.trim()) {
+            window.speechSynthesis.cancel()
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(result.text))
+          }
+        } catch (err) {
+          // A cancelled turn is the user's own doing: keep whatever prose
+          // arrived and say nothing about it.
+          if (loopRef.current !== loop) return
+          if (!(err instanceof Cancelled)) {
+            const next = patchAssistant({ error: (err as Error).message })
+            void window.api.sessions.write(next).then(refreshSummaries)
+          }
+        } finally {
+          if (loopRef.current === loop) {
+            loopRef.current = null
+            setStreaming(false)
+            setTurnStartedAt(null)
+            setPending(null)
+            resolveInteraction.current = null
+          }
         }
-
-        const streamRound = (messages: WireMessage[], readCount: number): void => {
-          const requestId = uid()
-          activeRequest.current = requestId
-          let accumulated = ''
-
-          unsubscribe.current?.()
-          unsubscribe.current = window.api.chat.send(
-            { requestId, model: current.model, messages },
-            (event) => {
-              if (activeRequest.current !== requestId) return
-              if (event.type === 'delta') {
-                accumulated += event.text
-                // Update in place; persistence happens once, in finish().
-                updateSession((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((m) =>
-                    m.id === assistantMsg.id ? { ...m, content: accumulated, error: undefined } : m
-                  )
-                }))
-                return
-              }
-
-              if (event.type === 'error') {
-                finish(requestId, { content: accumulated, error: event.message })
-                return
-              }
-
-              const requestedPath = workspaceContext ? requestedProjectFile(accumulated) : null
-              if (!workspaceContext || !requestedPath) {
-                if (voiceModeRef.current && accumulated.trim()) {
-                  window.speechSynthesis.cancel()
-                  window.speechSynthesis.speak(new SpeechSynthesisUtterance(accumulated))
-                }
-                finish(requestId, { content: accumulated })
-                return
-              }
-
-              if (readCount >= MAX_AGENT_FILE_READS) {
-                finish(requestId, {
-                  content: '',
-                  error: `AI Agent stopped after ${MAX_AGENT_FILE_READS} project-file reads in one turn.`
-                })
-                return
-              }
-
-              updateSession((prev) => ({
-                ...prev,
-                messages: prev.messages.map((m) =>
-                  m.id === assistantMsg.id
-                    ? { ...m, content: `Reading ${requestedPath}…`, error: undefined }
-                    : m
-                )
-              }))
-              unsubscribe.current?.()
-              unsubscribe.current = null
-
-              void window.api.fs
-                .readProjectFile(workspaceContext.root, requestedPath)
-                .then((file) => {
-                  if (activeRequest.current !== requestId) return
-                  const result = `ArgoIDE read this local project file for you:\n<file path="${file.relativePath}"${
-                    file.truncated ? ' truncated="true"' : ''
-                  }>\n${file.content}\n</file>\nContinue answering the user's original request. Read another file only if necessary.`
-                  streamRound(
-                    [
-                      ...messages,
-                      { role: 'assistant', content: accumulated },
-                      { role: 'user', content: result }
-                    ],
-                    readCount + 1
-                  )
-                })
-                .catch((err: Error) => {
-                  if (activeRequest.current !== requestId) return
-                  streamRound(
-                    [
-                      ...messages,
-                      { role: 'assistant', content: accumulated },
-                      {
-                        role: 'user',
-                        content: `ArgoIDE could not read "${requestedPath}": ${err.message}. Choose a valid text-file path from the project tree and continue.`
-                      }
-                    ],
-                    readCount + 1
-                  )
-                })
-            }
-          )
-        }
-
-        streamRound(initialMessages, 0)
       })()
     },
     [
       attachments,
       grants,
+      interact,
       loadProjectContext,
       projectContext,
       projectRoot,
@@ -449,7 +409,9 @@ export default function ChatPane({
 
   const newSession = useCallback(() => {
     stop()
-    // Carry the current model into the new session so the picker doesn't reset.
+    setTrace([])
+    // Carry the model into the new session so the picker doesn't reset. The
+    // mode deliberately resets to manual: a new task earns its own trust.
     updateSession((s) => emptySession(s.model || models[0]?.internalId || ''))
     setAttachments([])
     setDrawerOpen(false)
@@ -458,6 +420,7 @@ export default function ChatPane({
   const openSession = useCallback(
     async (id: string) => {
       stop()
+      setTrace([])
       const loaded = await window.api.sessions.read(id)
       if (loaded) updateSession(() => loaded)
       setDrawerOpen(false)
@@ -565,6 +528,9 @@ export default function ChatPane({
                     ))}
                   </div>
                 )}
+                {m.role === 'assistant' && m.trace && m.trace.length > 0 && (
+                  <TraceSummary steps={m.trace} durationMs={m.durationMs} />
+                )}
                 <div className="msg__body">
                   {m.content}
                   {streaming && m.role === 'assistant' && !m.content && (
@@ -574,24 +540,26 @@ export default function ChatPane({
                 </div>
               </div>
             ))}
+
+            {pending && (
+              <InteractionBlock
+                interaction={pending}
+                onApprove={answerInteraction}
+                onAnswer={answerInteraction}
+              />
+            )}
           </div>
 
-          <div
-            className={`project-context${projectContextError ? ' project-context--error' : ''}`}
-            title={projectContext?.root ?? projectContextError ?? 'Open a folder in Explorer'}
-          >
-            <FolderIcon size={12} />
-            <span className="project-context__label">AI Agent context</span>
-            <span className="project-context__value">
-              {!projectRoot
-                ? 'No Explorer folder open'
-                : indexingProject
-                  ? 'Indexing project…'
-                  : projectContext
-                    ? `${projectContext.name} · ${projectContext.fileCount} files · ${projectContext.directoryCount} folders${projectContext.truncated ? ' · tree truncated' : ''}`
-                    : projectContextError || 'Project unavailable'}
-            </span>
-          </div>
+          <AgentTrace
+            steps={trace}
+            running={streaming}
+            startedAt={turnStartedAt}
+            mode={session.mode ?? 'manual'}
+            projectRoot={projectRoot}
+            projectContext={projectContext}
+            projectContextError={projectContextError}
+            indexing={indexingProject}
+          />
 
           <Composer
             models={models}
@@ -600,6 +568,8 @@ export default function ChatPane({
             agents={AGENT_PRESETS}
             agentId={session.agentId}
             onAgentChange={(agentId) => persist({ ...session, agentId })}
+            mode={session.mode ?? 'manual'}
+            onModeChange={(mode) => persist({ ...session, mode })}
             attachments={attachments}
             onAttach={attachFiles}
             onRemoveAttachment={(id) => setAttachments((prev) => prev.filter((a) => a.id !== id))}
@@ -609,7 +579,7 @@ export default function ChatPane({
             onSend={send}
             onStop={stop}
             streaming={streaming}
-            disabled={!connected}
+            disabled={!connected || pending !== null}
             voiceMode={voiceMode}
             onVoiceModeChange={changeVoiceMode}
           />

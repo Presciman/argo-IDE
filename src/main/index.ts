@@ -16,6 +16,7 @@ import {
   AppSettings,
   ChatRequest,
   ChatSession,
+  ExecRequest,
   PtySpawnOptions
 } from '../shared/types'
 import { loadSettings, saveSettings } from './settings'
@@ -23,6 +24,7 @@ import * as shim from './shim'
 import * as chat from './chat'
 import * as files from './files'
 import * as terminal from './terminal'
+import * as exec from './exec'
 import * as sessions from './sessions'
 import { registerScheme, registerHandler } from './protocol'
 
@@ -174,6 +176,9 @@ function registerIpc(): void {
   // ------------------------------------------------------------- filesystem
   ipcMain.handle('fs:list', (_e, dir: string) => files.listDirectory(dir))
   ipcMain.handle('fs:readText', (_e, path: string) => files.readTextFile(path))
+  ipcMain.handle('fs:writeText', (_e, root: string, path: string, content: string) =>
+    files.writeTextFile(root, path, content)
+  )
   ipcMain.handle('fs:dataUrl', (_e, path: string, mime: string) =>
     files.readAsDataUrl(path, mime)
   )
@@ -184,6 +189,19 @@ function registerIpc(): void {
     files.readProjectFile(root, path)
   )
   ipcMain.handle('fs:home', () => app.getPath('home'))
+
+  // ----------------------------------------------------------- agent tools
+  ipcMain.handle('agent:writeProjectFile', async (_e, root: string, path: string, content: string) => {
+    const { result, previous, absolutePath } = await files.writeProjectFile(root, path, content)
+    // An open editor tab showing this file is now stale. Tell every window;
+    // a clean tab reloads, a dirty one warns instead of losing the draft.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('fs:fileChanged', absolutePath)
+    }
+    return { ...result, previous }
+  })
+  ipcMain.handle('agent:exec', (e, req: ExecRequest) => exec.run(e.sender, req))
+  ipcMain.on('agent:execCancel', (_e, id: string) => exec.kill(id))
 
   ipcMain.handle('dialog:openFolder', async () => {
     const r = await dialog.showOpenDialog({
@@ -242,8 +260,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Don't leak PTY children (the shim, and every open terminal) past quit.
+// Don't leak PTY children (the shim, every open terminal, and any command the
+// agent is still running) past quit.
 app.on('before-quit', () => {
   shim.shutdown()
   terminal.killAll()
+  exec.killAll()
 })

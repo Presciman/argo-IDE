@@ -114,7 +114,18 @@ export const CloseIcon = ({ size }: Props): JSX.Element =>
     size
   )
 
-export const SplitIcon = ({ size }: Props): JSX.Element =>
+/** Adds a pane to the right: the divider runs vertically. */
+export const SplitRightIcon = ({ size }: Props): JSX.Element =>
+  svg(
+    <>
+      <rect x="2" y="2" width="12" height="12" rx="1.4" />
+      <line x1="8" y1="2" x2="8" y2="14" />
+    </>,
+    size
+  )
+
+/** Adds a pane below: the divider runs horizontally. */
+export const SplitDownIcon = ({ size }: Props): JSX.Element =>
   svg(
     <>
       <rect x="2" y="2" width="12" height="12" rx="1.4" />
@@ -159,6 +170,22 @@ export const TrashIcon = ({ size }: Props): JSX.Element =>
     </>,
     size
   )
+
+export const CheckIcon = ({ size }: Props): JSX.Element =>
+  svg(<path d="M3 8.4l3.3 3.3L13 5" />, size)
+
+export const WarnIcon = ({ size }: Props): JSX.Element =>
+  svg(
+    <>
+      <circle cx="8" cy="8" r="6.2" />
+      <path d="M8 4.8v3.6" />
+      <circle cx="8" cy="11.1" r="0.55" fill="currentColor" stroke="none" />
+    </>,
+    size
+  )
+
+export const DotIcon = ({ size }: Props): JSX.Element =>
+  svg(<circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none" />, size)
 
 export const RefreshIcon = ({ size }: Props): JSX.Element =>
   svg(

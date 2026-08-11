@@ -320,6 +320,10 @@ select {
   background-color: var(--bg-3);
   color: var(--fg-0);
 }
+/* Full-access mode is never ambiguous at a glance. */
+.select--warn {
+  color: var(--warn);
+}
 
 .toggle {
   display: flex;
@@ -558,32 +562,314 @@ select {
   }
 }
 
-.project-context {
+/* ------------------------------------------------------- agent trace panel */
+
+/* Pinned above the composer. Fixed footprint: it refreshes in place rather
+   than pushing the conversation around as steps arrive. */
+.trace {
   flex: 0 0 auto;
   min-width: 0;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--fg-2);
+}
+
+.trace--idle {
   display: flex;
   align-items: center;
   gap: 6px;
   height: 28px;
   padding: 0 10px;
-  color: var(--fg-2);
-  background: var(--bg-1);
-  border-top: 1px solid var(--border);
-  font-size: 10.5px;
 }
-.project-context__label {
+.trace--error {
+  color: var(--err);
+}
+.trace__context-label {
   color: var(--fg-1);
   font-weight: 600;
   white-space: nowrap;
 }
-.project-context__value {
+.trace__context-value {
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.project-context--error {
+
+.trace__mode {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 9px;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-2);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+.trace__mode--full {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.trace__header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+.trace__title {
+  color: var(--fg-0);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace__clock {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.trace__steps {
+  max-height: 132px;
+  overflow-y: auto;
+  padding: 5px 10px 6px;
+}
+
+.trace__row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 0;
+  line-height: 1.55;
+}
+.trace__icon {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--fg-2);
+}
+.trace__row--done .trace__icon {
+  color: var(--ok);
+}
+.trace__row--failed .trace__icon,
+.trace__row--denied .trace__icon {
   color: var(--err);
+}
+.trace__row--muted {
+  opacity: 0.6;
+}
+.trace__label {
+  color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trace__row--running .trace__label {
+  color: var(--fg-0);
+}
+.trace__detail {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.trace__body {
+  grid-column: 2 / -1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 2px 0 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-strong);
+  max-height: 90px;
+  overflow: hidden;
+}
+
+.trace__spinner {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1.4px solid var(--accent);
+  border-right-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Collapsed trace, attached to a finished message. */
+.trace-summary {
+  font-size: 10.5px;
+}
+.trace-summary__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  color: var(--fg-2);
+  font-size: 10.5px;
+}
+.trace-summary__toggle:hover {
+  color: var(--fg-1);
+}
+.trace-summary__caret {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+.trace-summary__caret.is-open {
+  transform: rotate(90deg);
+}
+.trace-summary__steps {
+  margin-top: 5px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--bg-1);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.trace-summary__steps .trace__body {
+  max-height: none;
+}
+
+/* ------------------------------------------------- inline agent interaction */
+
+/* The turn is blocked on this, so it sits in the log where the user is
+   already reading rather than in a modal that covers the context. */
+.interaction {
+  border: 1px solid var(--accent-dim);
+  background: rgba(91, 157, 255, 0.07);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+}
+.interaction--risky {
+  border-color: var(--warn);
+  background: rgba(224, 165, 75, 0.09);
+}
+.interaction__header {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  margin-bottom: 7px;
+}
+.interaction--risky .interaction__header {
+  color: var(--warn);
+}
+.interaction__target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+  color: var(--fg-0);
+}
+.interaction__counts {
+  font-size: 10.5px;
+  color: var(--fg-2);
+}
+.diff__add-count {
+  color: var(--ok);
+}
+.diff__remove-count {
+  color: var(--err);
+}
+.interaction__why,
+.interaction__reason {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--fg-1);
+}
+.interaction__reason {
+  color: var(--warn);
+}
+.interaction__question {
+  font-size: 13px;
+  color: var(--fg-0);
+  margin-bottom: 8px;
+}
+.interaction__input {
+  width: 100%;
+  resize: vertical;
+  background: var(--bg-0);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 7px 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+.interaction__input:focus {
+  border-color: var(--accent);
+}
+.interaction__actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+}
+.interaction__hint {
+  flex: 1;
+  font-size: 10.5px;
+  color: var(--fg-2);
+}
+
+/* --------------------------------------------------------------- diff view */
+
+.diff {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: 220px;
+  overflow: auto;
+  padding: 5px 0;
+}
+.diff__line {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+  white-space: pre;
+}
+.diff__sign {
+  flex: 0 0 auto;
+  color: var(--fg-2);
+  user-select: none;
+}
+.diff__text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.diff__line--add {
+  background: rgba(78, 201, 160, 0.12);
+  color: var(--ok);
+}
+.diff__line--remove {
+  background: rgba(242, 99, 95, 0.12);
+  color: var(--err);
+}
+.diff__line--context {
+  color: var(--fg-2);
+}
+.diff__more {
+  padding: 3px 8px;
+  color: var(--fg-2);
 }
 
 /* ------------------------------------------------------------ composer */
@@ -740,7 +1026,7 @@ select {
   color: var(--fg-2);
 }
 
-/* ------------------------------------------------------------- viewer */
+/* ------------------------------------------------------------- editor */
 
 .tabs {
   display: flex;
@@ -768,6 +1054,12 @@ select {
   white-space: nowrap;
   flex: 0 0 auto;
   max-width: 210px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.tab:active {
+  cursor: grabbing;
 }
 .tab:hover {
   background: var(--bg-3);
@@ -776,9 +1068,20 @@ select {
   background: var(--bg-4);
   color: var(--fg-0);
 }
+.tab.is-dragging {
+  opacity: 0.38;
+}
 .tab__label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.tab__dirty {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  flex: 0 0 auto;
 }
 .tab__close {
   display: inline-flex;
@@ -795,33 +1098,133 @@ select {
   color: var(--err);
 }
 
-.viewer-split {
+/* Rows stack vertically; each row lays its cells out side by side. */
+.editor-split {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
 }
 
-.viewer-frame {
+.editor-row {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.editor-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The splitter itself is transparent until hovered, so cells need a static
+   divider. Only after a splitter — adjacent cells always have one between. */
+.editor-row .splitter + .editor-group {
+  border-left: 1px solid var(--border);
+}
+
+/* Which split receives the next opened file. Shown only when split. */
+.editor-group.is-focused > .pane__header {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.editor-group.is-drop-target {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.editor-drop-zone {
+  position: absolute;
+  inset: 29px 0 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-0);
+  font-size: 13px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-0) 80%);
+  border: 2px dashed var(--accent);
+  pointer-events: none;
+}
+
+.editor-drop-zone span {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  border: 1px solid var(--accent);
+}
+
+.editor-frame {
   width: 100%;
   height: 100%;
   border: none;
   background: #fff;
 }
 
-.code-fallback {
+.code-editor {
+  display: flex;
+  flex-direction: column;
   height: 100%;
-  overflow: auto;
-  padding: 12px;
+  min-height: 0;
   background: var(--bg-0);
 }
-.code-fallback pre {
-  margin: 0;
+
+.code-editor__surface {
+  flex: 1;
+  min-height: 0;
+}
+
+.code-fallback {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 12px;
+  background: var(--bg-0);
   color: var(--fg-0);
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.5;
   white-space: pre;
+  tab-size: 2;
+}
+
+.editor-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 7px 3px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+.editor-status.is-error {
+  color: var(--err);
+}
+/* The AI Agent rewrote this file while the user had unsaved edits. */
+.editor-status.is-stale {
+  color: var(--warn);
+}
+
+.editor-status__message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-status__shortcut {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
 }
 
 .urlbar {
@@ -848,8 +1251,40 @@ select {
   border-top: 1px solid var(--border);
 }
 
-.terminal-host {
+/* Side-by-side terminal splits, each with its own tab strip. */
+.terminal-columns {
   flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.terminal-group {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.terminal-columns .splitter + .terminal-group {
+  border-left: 1px solid var(--border);
+}
+.terminal-group.is-focused > .pane__header {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Background tabs stay mounted (hidden) so their shells keep running. */
+.terminal-stack {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+.terminal-slot {
+  position: absolute;
+  inset: 0;
+}
+
+.terminal-host {
+  height: 100%;
   min-height: 0;
   padding: 4px 0 4px 8px;
   overflow: hidden;

@@ -1,4 +1,4 @@
-import { JSX, useEffect, useRef, useState } from 'react'
+import { JSX, useCallback, useEffect, useRef, useState } from 'react'
 import Editor, { loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
@@ -45,70 +45,216 @@ export function languageOf(path: string): string {
   return map[ext] ?? 'plaintext'
 }
 
-/** Read-only Monaco. The viewer pane browses code; it does not edit it. */
-export function CodeViewer({ path }: { path: string }): JSX.Element {
-  const [content, setContent] = useState<string | null>(null)
+interface CodeEditorProps {
+  path: string
+  projectRoot: string
+  /** A tab-owned draft survives tab switches and cross-split moves. */
+  draft?: string
+  dirty: boolean
+  onDraftChange: (value: string, dirty: boolean) => void
+  onSaved: (value: string) => void
+}
+
+/** Editable Monaco with explicit save, Cmd/Ctrl+S, and a plain-text fallback. */
+export function CodeEditor({
+  path,
+  projectRoot,
+  draft,
+  dirty,
+  onDraftChange,
+  onSaved
+}: CodeEditorProps): JSX.Element {
+  const [diskContent, setDiskContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editorReady, setEditorReady] = useState(false)
   const [editorTimedOut, setEditorTimedOut] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [staleOnDisk, setStaleOnDisk] = useState(false)
+  const currentValueRef = useRef('')
+  const saveRef = useRef<() => Promise<void>>(async () => undefined)
+  // Latest dirty flag for the disk-change listener, which outlives this render.
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
 
   useEffect(() => {
     let cancelled = false
-    setContent(null)
+    setDiskContent(null)
     setError(null)
     setEditorReady(false)
     setEditorTimedOut(false)
+    setSaveState('idle')
+    setSaveError(null)
+    setStaleOnDisk(false)
     window.api.fs
       .readText(path)
-      .then((text) => !cancelled && setContent(text))
+      .then((text) => !cancelled && setDiskContent(text))
       .catch((err: Error) => !cancelled && setError(err.message))
     return () => {
       cancelled = true
     }
   }, [path])
 
-  // Never strand the viewer on a spinner again. If Monaco cannot initialize
+  /**
+   * The AI Agent can write files this editor has open.
+   *
+   * A clean tab silently reloads. A tab with unsaved edits must not: the
+   * user's draft is the one thing we can't recover, so it stays and they get
+   * told the file moved underneath them.
+   */
+  useEffect(
+    () =>
+      window.api.fs.onFileChanged((changed) => {
+        if (changed !== path) return
+        if (dirtyRef.current) {
+          setStaleOnDisk(true)
+          return
+        }
+        window.api.fs
+          .readText(path)
+          .then(setDiskContent)
+          .catch((err: Error) => setError(err.message))
+      }),
+    [path]
+  )
+
+  // Never strand the editor on a spinner again. If Monaco cannot initialize
   // for an unexpected platform reason, the file remains readable as plain text.
   useEffect(() => {
-    if (content === null || editorReady) return
+    if (diskContent === null || editorReady) return
     const timer = window.setTimeout(() => setEditorTimedOut(true), 8_000)
     return () => window.clearTimeout(timer)
-  }, [content, editorReady])
+  }, [diskContent, editorReady])
+
+  const value = draft ?? diskContent ?? ''
+  currentValueRef.current = value
+
+  const save = useCallback(async (): Promise<void> => {
+    if (diskContent === null || saveState === 'saving') return
+    const next = currentValueRef.current
+    setSaveState('saving')
+    setSaveError(null)
+    try {
+      await window.api.fs.writeText(projectRoot, path, next)
+      setDiskContent(next)
+      onSaved(next)
+      setSaveState('saved')
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err))
+      setSaveState('error')
+    }
+  }, [diskContent, onSaved, path, projectRoot, saveState])
+  saveRef.current = save
+
+  const changeDraft = (next: string): void => {
+    currentValueRef.current = next
+    onDraftChange(next, next !== diskContent)
+    setSaveState('idle')
+    setSaveError(null)
+  }
+
+  const saveLabel =
+    saveState === 'saving'
+      ? 'Saving…'
+      : saveState === 'error'
+        ? `Save failed: ${saveError ?? 'Unknown error'}`
+        : dirty
+          ? 'Unsaved changes'
+          : saveState === 'saved'
+            ? 'Saved'
+            : 'Ready'
+
+  const reloadFromDisk = (): void => {
+    setStaleOnDisk(false)
+    window.api.fs
+      .readText(path)
+      .then((text) => {
+        setDiskContent(text)
+        // Drop the draft: the user explicitly chose the disk copy.
+        onDraftChange(text, false)
+      })
+      .catch((err: Error) => setError(err.message))
+  }
+
+  const statusBar = (
+    <div
+      className={`editor-status${saveState === 'error' ? ' is-error' : ''}${staleOnDisk ? ' is-stale' : ''}`}
+    >
+      <span className="editor-status__message" title={saveError ?? undefined}>
+        {staleOnDisk ? 'Changed on disk — your unsaved edits are kept' : saveLabel}
+      </span>
+      {staleOnDisk && (
+        <button className="btn btn--sm" onClick={reloadFromDisk} title="Discard edits and reload">
+          Reload
+        </button>
+      )}
+      <span className="editor-status__shortcut">⌘S</span>
+      <button
+        className="btn btn--sm"
+        disabled={!dirty || saveState === 'saving'}
+        onClick={() => void save()}
+        title="Save file (⌘S)"
+      >
+        Save
+      </button>
+    </div>
+  )
 
   if (error) return <div className="empty-state">{error}</div>
-  if (content === null) return <div className="empty-state">Loading…</div>
+  if (diskContent === null) return <div className="empty-state">Loading…</div>
   if (editorTimedOut) {
     return (
-      <div className="code-fallback">
+      <div className="code-editor">
         <div className="banner banner--warn">
-          Syntax highlighting could not start. Showing the file as plain text.
+          Syntax highlighting could not start. Editing as plain text.
         </div>
-        <pre>{content}</pre>
+        <textarea
+          className="code-fallback"
+          value={value}
+          spellCheck={false}
+          onChange={(event) => changeDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+              event.preventDefault()
+              void save()
+            }
+          }}
+        />
+        {statusBar}
       </div>
     )
   }
 
   return (
-    <Editor
-      height="100%"
-      theme="vs-dark"
-      path={path}
-      language={languageOf(path)}
-      value={content}
-      loading={<div className="empty-state">Starting local editor…</div>}
-      onMount={() => setEditorReady(true)}
-      options={{
-        readOnly: true,
-        domReadOnly: true,
-        minimap: { enabled: true, maxColumn: 70 },
-        fontSize: 12.5,
-        fontFamily: "'SF Mono', 'JetBrains Mono', Menlo, monospace",
-        scrollBeyondLastLine: false,
-        renderWhitespace: 'selection',
-        smoothScrolling: true,
-        automaticLayout: true
-      }}
-    />
+    <div className="code-editor">
+      <div className="code-editor__surface">
+        <Editor
+          height="100%"
+          theme="vs-dark"
+          path={path}
+          language={languageOf(path)}
+          value={value}
+          loading={<div className="empty-state">Starting local editor…</div>}
+          onChange={(next) => changeDraft(next ?? '')}
+          onMount={(editor) => {
+            setEditorReady(true)
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+              void saveRef.current()
+            })
+          }}
+          options={{
+            minimap: { enabled: true, maxColumn: 70 },
+            fontSize: 12.5,
+            fontFamily: "'SF Mono', 'JetBrains Mono', Menlo, monospace",
+            scrollBeyondLastLine: false,
+            renderWhitespace: 'selection',
+            smoothScrolling: true,
+            automaticLayout: true
+          }}
+        />
+      </div>
+      {statusBar}
+    </div>
   )
 }
 
@@ -122,7 +268,7 @@ export function CodeViewer({ path }: { path: string }): JSX.Element {
  * document starts rendering before it has fully loaded.
  */
 export function PdfViewer({ path }: { path: string }): JSX.Element {
-  return <iframe className="viewer-frame" src={window.api.fs.url(path)} title={path} />
+  return <iframe className="editor-frame" src={window.api.fs.url(path)} title={path} />
 }
 
 export function ImageViewer({ path }: { path: string }): JSX.Element {
@@ -155,34 +301,64 @@ export function ImageViewer({ path }: { path: string }): JSX.Element {
  * external sites. React doesn't know the tag, so attributes are set on the DOM
  * node directly.
  */
-export function WebViewer({ initialUrl }: { initialUrl: string }): JSX.Element {
-  const [url, setUrl] = useState(initialUrl)
+interface WebViewerProps {
+  initialUrl: string
+  /** Keep the tab's current address when it is moved or remounted. */
+  onUrlChange: (url: string) => void
+}
+
+interface WebViewElement extends HTMLElement {
+  loadURL?: (url: string) => Promise<void>
+  reload?: () => void
+}
+
+export function WebViewer({ initialUrl, onUrlChange }: WebViewerProps): JSX.Element {
   const [input, setInput] = useState(initialUrl)
   const hostRef = useRef<HTMLDivElement>(null)
-  const viewRef = useRef<HTMLElement | null>(null)
+  const viewRef = useRef<WebViewElement | null>(null)
+  const onUrlChangeRef = useRef(onUrlChange)
+  onUrlChangeRef.current = onUrlChange
 
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const view = document.createElement('webview')
-    view.setAttribute('src', url)
+    const view = document.createElement('webview') as WebViewElement
+    view.setAttribute('src', initialUrl)
     view.setAttribute('partition', 'persist:argo-ide-browser')
     view.setAttribute('allowpopups', 'false')
     view.style.width = '100%'
     view.style.height = '100%'
     view.style.background = '#fff'
+
+    const trackNavigation = (event: Event): void => {
+      const next = (event as Event & { url?: string }).url
+      if (!next) return
+      setInput(next)
+      onUrlChangeRef.current(next)
+    }
+    view.addEventListener('did-navigate', trackNavigation)
+    view.addEventListener('did-navigate-in-page', trackNavigation)
     host.appendChild(view)
     viewRef.current = view
     return () => {
+      view.removeEventListener('did-navigate', trackNavigation)
+      view.removeEventListener('did-navigate-in-page', trackNavigation)
       view.remove()
       viewRef.current = null
     }
-  }, [url])
+    // The active viewer is keyed by tab id. Moving or reactivating the tab
+    // remounts it with the latest URL already stored in the tab.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const go = (): void => {
     const trimmed = input.trim()
     if (!trimmed) return
-    setUrl(/^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`)
+    const destination = /^[a-z]+:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+    setInput(destination)
+    onUrlChangeRef.current(destination)
+    if (viewRef.current?.loadURL) void viewRef.current.loadURL(destination)
+    else viewRef.current?.setAttribute('src', destination)
   }
 
   return (
@@ -200,7 +376,7 @@ export function WebViewer({ initialUrl }: { initialUrl: string }): JSX.Element {
         <button
           className="icon-btn"
           title="Reload"
-          onClick={() => (viewRef.current as { reload?: () => void } | null)?.reload?.()}
+          onClick={() => viewRef.current?.reload?.()}
         >
           <RefreshIcon size={13} />
         </button>

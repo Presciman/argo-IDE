@@ -74,8 +74,27 @@ export function stream(sender: WebContents, req: ChatRequest): void {
           const data = line.slice(5).trim()
           if (data === '[DONE]') continue
           try {
-            const delta = JSON.parse(data)?.choices?.[0]?.delta?.content
-            if (typeof delta === 'string' && delta) emit({ type: 'delta', text: delta })
+            const parsed = JSON.parse(data)
+            const delta = parsed?.choices?.[0]?.delta
+            if (typeof delta?.content === 'string' && delta.content) {
+              emit({ type: 'delta', text: delta.content })
+            }
+
+            // Reasoning models expose their chain of thought under one of two
+            // spellings, and most models send neither. Purely additive: when
+            // it's absent the trace just shows ArgoIDE's own steps.
+            const reasoning = delta?.reasoning_content ?? delta?.reasoning
+            if (typeof reasoning === 'string' && reasoning) {
+              emit({ type: 'reasoning', text: reasoning })
+            }
+
+            if (parsed?.usage) {
+              emit({
+                type: 'usage',
+                promptTokens: parsed.usage.prompt_tokens,
+                completionTokens: parsed.usage.completion_tokens
+              })
+            }
           } catch {
             // A frame we can't parse isn't fatal — skip it and keep streaming.
           }

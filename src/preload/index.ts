@@ -6,13 +6,16 @@ import {
   ChatRequest,
   ChatSession,
   DirEntry,
+  ExecRequest,
+  ExecResult,
   PtySpawnOptions,
   ProjectContext,
   ProjectFile,
   SessionSummary,
   ShimOccupant,
   ShimStatus,
-  StreamEvent
+  StreamEvent,
+  WriteResult
 } from '../shared/types'
 import { fileUrl } from '../shared/fileUrl'
 
@@ -75,6 +78,8 @@ const api = {
   fs: {
     list: (dir: string): Promise<DirEntry[]> => ipcRenderer.invoke('fs:list', dir),
     readText: (path: string): Promise<string> => ipcRenderer.invoke('fs:readText', path),
+    writeText: (root: string, path: string, content: string): Promise<void> =>
+      ipcRenderer.invoke('fs:writeText', root, path, content),
     dataUrl: (path: string, mime: string): Promise<string> =>
       ipcRenderer.invoke('fs:dataUrl', path, mime),
     /**
@@ -94,7 +99,40 @@ const api = {
       ipcRenderer.invoke('fs:readProjectFile', root, path),
     home: (): Promise<string> => ipcRenderer.invoke('fs:home'),
     pickFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFolder'),
-    pickFiles: (): Promise<string[]> => ipcRenderer.invoke('dialog:openFiles')
+    pickFiles: (): Promise<string[]> => ipcRenderer.invoke('dialog:openFiles'),
+    /** Fires when the AI Agent writes a file, so open editors don't go stale. */
+    onFileChanged: (cb: (path: string) => void): (() => void) => {
+      const h = (_e: IpcRendererEvent, path: string): void => cb(path)
+      ipcRenderer.on('fs:fileChanged', h)
+      return () => ipcRenderer.removeListener('fs:fileChanged', h)
+    }
+  },
+
+  agent: {
+    /**
+     * Write a text file inside the open project. The main process jails this
+     * to the Explorer root regardless of the current agent mode.
+     */
+    writeFile: (
+      root: string,
+      path: string,
+      content: string
+    ): Promise<WriteResult & { previous: string | null }> =>
+      ipcRenderer.invoke('agent:writeProjectFile', root, path, content),
+    /**
+     * Run one command in a private PTY rooted at the project. Never touches
+     * the user's terminal panel. Rejects if the command needs approval and
+     * `userApproved` is not set.
+     */
+    exec: (req: ExecRequest): Promise<ExecResult> => ipcRenderer.invoke('agent:exec', req),
+    cancelExec: (id: string): void => ipcRenderer.send('agent:execCancel', id),
+    /** Live output while a command runs, for the progress panel. */
+    onExecData: (id: string, cb: (chunk: string) => void): (() => void) => {
+      const channel = `agent:exec:data:${id}`
+      const h = (_e: IpcRendererEvent, chunk: string): void => cb(chunk)
+      ipcRenderer.on(channel, h)
+      return () => ipcRenderer.removeListener(channel, h)
+    }
   },
 
   terminal: {

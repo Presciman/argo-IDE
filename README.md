@@ -2,6 +2,8 @@
 
 A desktop IDE for working alongside the [Argo](https://apps.inside.anl.gov) API, built for macOS. Support for other operating systems is currently in development.
 
+# <img src="build/Argo-IDE_demo.png" alt="Argo-IDE demo" width="3000" valign="middle" />
+
 ## Why Argo-IDE?
 
 - **Simple and intuitive** — A clean three-pane layout keeps the AI Agent at the center of your workflow.
